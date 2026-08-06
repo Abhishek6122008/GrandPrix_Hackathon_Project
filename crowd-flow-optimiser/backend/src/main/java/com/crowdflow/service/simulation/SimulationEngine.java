@@ -1,9 +1,14 @@
 package com.crowdflow.service.simulation;
 
 import com.crowdflow.model.SimulationRun;
+import com.crowdflow.model.ArrivalPhase;
+import com.crowdflow.model.Person;
+import com.crowdflow.model.ReroutePath;
+import com.crowdflow.model.Session;
 import com.crowdflow.model.Venue;
 import com.crowdflow.model.VenueEdge;
 import com.crowdflow.model.VenueNode;
+import com.crowdflow.service.routing.RerouteEngine;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -12,39 +17,73 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 /**
- * Tick-based crowd flow over the venue graph.
+ * Crowd movement over the venue graph, in two modes that share this class.
  *
- * <p>Each tick: exits drain, everyone else advances toward the nearest exit as far as
- * downstream capacity and edge throughput allow, then new arrivals enter at the gates.
- * People who cannot move stay put — that is what makes a node's density climb, which is
- * exactly the bottleneck the detector is looking for.
+ * <p><b>Flow mode</b> ({@link #advanceTick}) drives the older {@code /simulations} runs:
+ * per-node counts move downstream as far as capacity and edge throughput allow. Cheap, and
+ * enough for the before/after summary.
+ *
+ * <p><b>Agent mode</b> ({@link #step}) drives {@code /sessions}: individual {@link Person}
+ * agents integrated under the {@link SocialForceModel}, so the map shows people rather than
+ * numbers. Node population falls out of where the agents are.
+ *
+ * <p>In both modes, people who cannot move stay put — that is what makes a node's density
+ * climb, which is exactly the bottleneck the detector is looking for.
  */
 @Service
 public class SimulationEngine {
 
     private final AgentFactory agentFactory;
     private final SocialForceModel socialForceModel;
+    private final RerouteEngine routeEngine;
     private final double criticalThreshold;
+    private final double agentSpeed;
+    private final double neighbourRadius;
+    private final double corridorScale;
 
     /** Hop distance to the nearest exit, per venue. Layouts are immutable once uploaded. */
     private final Map<String, Map<String, Integer>> hopCache = new ConcurrentHashMap<>();
+    /** Edge half-width in layout units, keyed "venueId|from|to". Same reason: layouts are fixed. */
+    private final Map<String, Double> corridorCache = new ConcurrentHashMap<>();
 
+    @Autowired
     public SimulationEngine(AgentFactory agentFactory, SocialForceModel socialForceModel,
-                            @Value("${simulation.critical-threshold:0.85}") double criticalThreshold) {
+                            RerouteEngine routeEngine,
+                            @Value("${simulation.critical-threshold:0.85}") double criticalThreshold,
+                            @Value("${session.agent-speed:3.2}") double agentSpeed,
+                            @Value("${session.neighbour-radius:10.0}") double neighbourRadius,
+                            @Value("${session.corridor-scale:1.5}") double corridorScale) {
         this.agentFactory = agentFactory;
         this.socialForceModel = socialForceModel;
+        this.routeEngine = routeEngine;
         this.criticalThreshold = criticalThreshold;
+        this.agentSpeed = agentSpeed;
+        this.neighbourRadius = neighbourRadius;
+        this.corridorScale = corridorScale;
+    }
+
+    /** Flow-mode-only constructor, for tests that never touch agent mode. */
+    public SimulationEngine(AgentFactory agentFactory, SocialForceModel socialForceModel,
+                            double criticalThreshold) {
+        this(agentFactory, socialForceModel, new RerouteEngine(0.70), criticalThreshold, 3.2, 10.0, 1.5);
     }
 
     public SimulationRun create(Venue venue, int crowdSize, int ticks, int arrivalRate, boolean rerouteEnabled) {
+        return create(venue, crowdSize, ticks, arrivalRate, List.of(), rerouteEnabled);
+    }
+
+    public SimulationRun create(Venue venue, int crowdSize, int ticks, int arrivalRate,
+                                List<ArrivalPhase> arrivalSchedule, boolean rerouteEnabled) {
         SimulationRun run = new SimulationRun("sim-" + UUID.randomUUID().toString().substring(0, 8),
-                venue.id(), crowdSize, ticks, arrivalRate, rerouteEnabled);
+                venue.id(), crowdSize, ticks, arrivalRate, arrivalSchedule, rerouteEnabled);
         venue.nodes().forEach(n -> run.getOccupancy().put(n.id(), 0));
         run.getHistory().add(Map.copyOf(run.getOccupancy())); // tick 0 = empty venue
         return run;
@@ -113,8 +152,11 @@ public class SimulationEngine {
         // 3. New arrivals queue in at the gates, split evenly, capped by gate headroom.
         List<VenueNode> gates = venue.nodes().stream().filter(VenueNode::isEntry).toList();
         if (!gates.isEmpty()) {
-            int perGate = Math.max(1, run.getArrivalRate() / gates.size());
-            for (VenueNode gate : gates) {
+            int scheduledRate = run.arrivalRateAt(run.getCurrentTick());
+            int perGate = scheduledRate / gates.size();
+            int remainder = scheduledRate % gates.size();
+            for (int gateIndex = 0; gateIndex < gates.size(); gateIndex++) {
+                VenueNode gate = gates.get(gateIndex);
                 int inGate = next.getOrDefault(gate.id(), 0);
                 // With rerouting on we act on our own advice: intake is held so the gate
                 // never crosses critical — people wait outside instead of crushing inside.
@@ -122,7 +164,8 @@ public class SimulationEngine {
                 int ceiling = run.isRerouteEnabled()
                         ? (int) Math.ceil(gate.capacity() * criticalThreshold) - 1
                         : gate.capacity();
-                int arriving = run.takeArrivals(Math.max(0, Math.min(perGate, ceiling - inGate)));
+                int gateShare = perGate + (gateIndex < remainder ? 1 : 0);
+                int arriving = run.takeArrivals(Math.max(0, Math.min(gateShare, ceiling - inGate)));
                 if (arriving > 0) {
                     next.merge(gate.id(), arriving, Integer::sum);
                 }
@@ -218,5 +261,297 @@ public class SimulationEngine {
         }
         venue.nodes().forEach(n -> hops.putIfAbsent(n.id(), Integer.MAX_VALUE));
         return hops;
+    }
+
+    // ================================================================================
+    // Agent mode — individual people under the social force model, used by /sessions.
+    // ================================================================================
+
+    /**
+     * How big a node is on the map. Derived from capacity so a 900-seat stand is visibly a
+     * bigger space than a 90-person kiosk, which is also what makes agents spread out inside
+     * it instead of stacking on one point.
+     */
+    public static double nodeRadius(VenueNode node) {
+        return Math.max(10.0, Math.min(44.0, 8.0 + Math.sqrt(node.capacity()) * 0.6));
+    }
+
+    /**
+     * Advances a session by exactly one tick: new arrivals enter at the gates, every agent
+     * integrates one step under the social force model, and anyone who has reached an exit
+     * leaves the venue.
+     *
+     * <p>Called only from the session tick thread — see {@link Session} on why nothing here
+     * synchronises.
+     */
+    public void step(Session session) {
+        Venue venue = session.getVenue();
+        spawnArrivals(session, venue);
+        integrate(session, venue);
+        resolveArrivals(session, venue);
+        session.setTick(session.getTick() + 1);
+    }
+
+    /**
+     * Gates admit up to {@code arrivalRate} people per tick, split across them. With
+     * rerouting on we act on our own advice and hold intake at a gate that has gone critical
+     * — people wait outside rather than being crushed inside, which is the whole point.
+     */
+    private void spawnArrivals(Session session, Venue venue) {
+        int wanted = Math.min(session.getArrivalRate(), session.remainingToSpawn());
+        if (wanted <= 0) {
+            return;
+        }
+        List<VenueNode> gates = venue.nodes().stream().filter(VenueNode::isEntry).toList();
+        if (gates.isEmpty()) {
+            return;
+        }
+
+        Map<String, Integer> occupancy = session.occupancy();
+        Random random = new Random(session.getId().hashCode() * 31L + session.getTick());
+        int spawnedThisTick = 0;
+
+        for (int i = 0; i < gates.size(); i++) {
+            VenueNode gate = gates.get(i);
+            int share = wanted / gates.size() + (i < wanted % gates.size() ? 1 : 0);
+            if (share <= 0) {
+                continue;
+            }
+            if (session.isRerouteEnabled()
+                    && (double) occupancy.getOrDefault(gate.id(), 0) / gate.capacity() >= criticalThreshold) {
+                continue;
+            }
+
+            ReroutePath toExit = routeEngine.nearestExit(venue, gate.id());
+            List<Person> arrivals = agentFactory.createAgents(share, gate, session.getId(),
+                    session.getSpawned() + spawnedThisTick, agentSpeed, nodeRadius(gate) * 0.8, random);
+            for (Person person : arrivals) {
+                if (toExit.toNodeId() != null) {
+                    person.setRoute(toExit.path().subList(1, toExit.path().size()));
+                }
+                // No exit reachable from this gate: the person still enters and mills about,
+                // which is exactly the "venue with no exit" case the detector should scream at.
+            }
+            session.getPeople().addAll(arrivals);
+            spawnedThisTick += arrivals.size();
+        }
+        session.recordSpawned(spawnedThisTick);
+    }
+
+    /**
+     * One integration step for every agent.
+     *
+     * <p>Two passes on purpose: accelerations are computed from the positions everyone had at
+     * the start of the tick, then applied. Mutating in place as we walk the list would make an
+     * agent's neighbours depend on its index in the list, which shows up as the crowd
+     * mysteriously drifting in list order.
+     */
+    private void integrate(Session session, Venue venue) {
+        List<Person> people = session.getPeople();
+        int count = people.size();
+        if (count == 0) {
+            return;
+        }
+        Map<String, VenueNode> nodesById = venue.nodesById();
+        Map<Long, List<Person>> grid = spatialHash(people);
+
+        double[] ax = new double[count];
+        double[] ay = new double[count];
+
+        for (int i = 0; i < count; i++) {
+            Person person = people.get(i);
+            double[] position = {person.getX(), person.getY()};
+            double[] velocity = {person.getVx(), person.getVy()};
+            double[] target = waypointPosition(person, nodesById);
+
+            double[] force = socialForceModel.drivingForce(position, velocity, target, person.getDesiredSpeed());
+
+            for (Person other : neighbours(grid, person)) {
+                if (other == person) {
+                    continue;
+                }
+                double[] repulsion = socialForceModel.agentRepulsion(
+                        position, new double[] {other.getX(), other.getY()},
+                        person.getRadius() + other.getRadius());
+                force[0] += repulsion[0];
+                force[1] += repulsion[1];
+            }
+
+            double[] corridor = corridorForce(session, person, position, nodesById);
+            force[0] += corridor[0];
+            force[1] += corridor[1];
+
+            ax[i] = force[0];
+            ay[i] = force[1];
+        }
+
+        for (int i = 0; i < count; i++) {
+            Person person = people.get(i);
+            double vx = person.getVx() + ax[i];
+            double vy = person.getVy() + ay[i];
+
+            // Nobody sprints, however hard the crowd shoves. Without this cap a dense pile-up
+            // fires agents across the map and the density readings go with them.
+            double maxSpeed = person.getDesiredSpeed() * 1.4;
+            double speed = Math.hypot(vx, vy);
+            if (speed > maxSpeed) {
+                vx = vx / speed * maxSpeed;
+                vy = vy / speed * maxSpeed;
+            }
+            person.setVelocity(vx, vy);
+            person.setPosition(person.getX() + vx, person.getY() + vy);
+        }
+    }
+
+    /**
+     * Moves each agent's node membership on when it reaches its next waypoint, and removes
+     * anyone who has reached an exit.
+     */
+    private void resolveArrivals(Session session, Venue venue) {
+        Map<String, VenueNode> nodesById = venue.nodesById();
+        List<Person> people = session.getPeople();
+        int exited = 0;
+
+        for (int i = people.size() - 1; i >= 0; i--) {
+            Person person = people.get(i);
+
+            // A short hop can clear more than one waypoint in a tick, so loop rather than if.
+            String next;
+            while ((next = person.nextWaypoint()) != null) {
+                VenueNode node = nodesById.get(next);
+                if (node == null) {
+                    person.advanceWaypoint(); // waypoint vanished with the layout; skip it
+                    continue;
+                }
+                if (Math.hypot(person.getX() - node.x(), person.getY() - node.y()) > nodeRadius(node)) {
+                    break;
+                }
+                person.advanceWaypoint();
+            }
+
+            VenueNode here = nodesById.get(person.getCurrentNodeId());
+            if (here != null && here.isExit()) {
+                person.setArrived(true);
+                people.remove(i);
+                exited++;
+            } else if (person.nextWaypoint() == null && here != null && !here.isExit()) {
+                // Route spent without reaching an exit — usually because a reroute stranded
+                // them. Re-plan rather than leave them standing forever.
+                ReroutePath replan = routeEngine.nearestExit(venue, person.getCurrentNodeId());
+                if (replan.toNodeId() != null) {
+                    person.setRoute(replan.path().subList(1, replan.path().size()));
+                }
+            }
+        }
+        session.recordExited(exited);
+    }
+
+    /** Where an agent is walking to: its next waypoint, or its own node once the route is spent. */
+    private double[] waypointPosition(Person person, Map<String, VenueNode> nodesById) {
+        String next = person.nextWaypoint();
+        VenueNode node = nodesById.get(next == null ? person.getCurrentNodeId() : next);
+        return node == null ? new double[] {person.getX(), person.getY()} : new double[] {node.x(), node.y()};
+    }
+
+    /**
+     * Keeps an agent in the corridor it is walking down. Half-width comes from the edge's real
+     * width, so a 3 m service passage squeezes people together and a 9 m concourse does not.
+     *
+     * <p>Inside the corridor this is the social force wall term applied to both offset walls,
+     * which is what stops the crowd hugging one edge. Outside it is a straight pull back to
+     * the centreline — because the wall term repels, and repelling an agent that has already
+     * strayed past a wall shoves it further out. That asymmetry is easy to miss and its
+     * symptom is agents orbiting a node forever without ever entering it.
+     */
+    private double[] corridorForce(Session session, Person person, double[] position,
+                                   Map<String, VenueNode> nodesById) {
+        String next = person.nextWaypoint();
+        if (next == null) {
+            return new double[] {0, 0};
+        }
+        VenueNode from = nodesById.get(person.getCurrentNodeId());
+        VenueNode to = nodesById.get(next);
+        if (from == null || to == null) {
+            return new double[] {0, 0};
+        }
+        double dx = to.x() - from.x();
+        double dy = to.y() - from.y();
+        double length = Math.hypot(dx, dy);
+        if (length < 1e-6) {
+            return new double[] {0, 0};
+        }
+
+        double halfWidth = halfWidthOf(session.getVenue(), from.id(), to.id());
+        double nx = -dy / length;   // unit normal to the centreline
+        double ny = dx / length;
+        double offset = (position[0] - from.x()) * nx + (position[1] - from.y()) * ny;
+
+        if (Math.abs(offset) >= halfWidth) {
+            // Strayed out of the corridor — steer back in, proportional to how far out.
+            double pull = Math.min(2.0, (Math.abs(offset) - halfWidth) * 0.25 + 0.5);
+            double sign = offset > 0 ? -1 : 1;
+            return new double[] {nx * pull * sign, ny * pull * sign};
+        }
+
+        double[] left = socialForceModel.wallRepulsion(position,
+                new double[] {from.x() + nx * halfWidth, from.y() + ny * halfWidth},
+                new double[] {to.x() + nx * halfWidth, to.y() + ny * halfWidth});
+        double[] right = socialForceModel.wallRepulsion(position,
+                new double[] {from.x() - nx * halfWidth, from.y() - ny * halfWidth},
+                new double[] {to.x() - nx * halfWidth, to.y() - ny * halfWidth});
+        return new double[] {left[0] + right[0], left[1] + right[1]};
+    }
+
+    private double halfWidthOf(Venue venue, String from, String to) {
+        return corridorCache.computeIfAbsent(venue.id() + "|" + from + "|" + to, key -> {
+            double width = venue.edges().stream()
+                    .filter(e -> (e.from().equals(from) && e.to().equals(to))
+                            || (e.bidirectional() && e.from().equals(to) && e.to().equals(from)))
+                    .mapToDouble(VenueEdge::width)
+                    .findFirst()
+                    .orElse(6.0);
+            // Floor of 12: narrower than that and the corridor is thinner than the discs
+            // agents spawn into, so people start life outside the walls they belong between.
+            return Math.max(12.0, width * corridorScale);
+        });
+    }
+
+    /**
+     * Buckets agents into cells the width of the interaction radius, so each agent only tests
+     * the nine cells around it instead of the whole crowd.
+     *
+     * <p>ponytail: uniform grid, rebuilt every tick. It is O(n) to build and keeps the tick
+     * near-linear up to a few thousand agents, which is all a demo venue holds. If crowd sizes
+     * grow past that, reuse the grid across ticks and update cells on the move instead.
+     */
+    private Map<Long, List<Person>> spatialHash(List<Person> people) {
+        Map<Long, List<Person>> grid = new HashMap<>();
+        for (Person person : people) {
+            grid.computeIfAbsent(cellKey(person.getX(), person.getY()), k -> new ArrayList<>()).add(person);
+        }
+        return grid;
+    }
+
+    private List<Person> neighbours(Map<Long, List<Person>> grid, Person person) {
+        long cellX = (long) Math.floor(person.getX() / neighbourRadius);
+        long cellY = (long) Math.floor(person.getY() / neighbourRadius);
+        List<Person> found = new ArrayList<>();
+        for (long dx = -1; dx <= 1; dx++) {
+            for (long dy = -1; dy <= 1; dy++) {
+                List<Person> cell = grid.get(key(cellX + dx, cellY + dy));
+                if (cell != null) {
+                    found.addAll(cell);
+                }
+            }
+        }
+        return found;
+    }
+
+    private long cellKey(double x, double y) {
+        return key((long) Math.floor(x / neighbourRadius), (long) Math.floor(y / neighbourRadius));
+    }
+
+    private long key(long cellX, long cellY) {
+        return (cellX << 32) ^ (cellY & 0xffff_ffffL);
     }
 }

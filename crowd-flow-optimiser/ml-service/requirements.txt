@@ -1,6 +1,13 @@
+# --- /analyze: the Hugging Face Inference API path. This is all you need to run the
+# --- primary endpoint; everything below the next block is the offline fallback.
 fastapi>=0.115
 uvicorn[standard]>=0.32
+httpx>=0.27
 pydantic>=2.9
+python-dotenv>=1.0
+
+# --- Self-hosted fallback (/predict/risk, /generate/advisory). Heavy, and only needed if
+# --- you want inference to work with no network. Skip these to run /analyze alone.
 transformers>=4.45
 
 # The GNN. Install torch first — on CPU-only machines:
