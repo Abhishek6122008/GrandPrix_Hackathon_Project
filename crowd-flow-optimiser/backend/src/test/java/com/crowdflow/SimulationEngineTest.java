@@ -3,6 +3,7 @@ package com.crowdflow;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.crowdflow.model.Alert;
+import com.crowdflow.model.ArrivalPhase;
 import com.crowdflow.model.ReroutePath;
 import com.crowdflow.model.SimulationRun;
 import com.crowdflow.model.Venue;
@@ -121,5 +122,18 @@ class SimulationEngineTest {
         Map<String, Integer> occupancy = Map.of("gate", 100, "walk", 200, "food", 20, "exit", 300);
 
         assertThat(rerouteEngine.findReroute(VENUE, "gate", occupancy).toNodeId()).isNull();
+    }
+
+    @Test
+    void scheduleControlsArrivalsAndAllowsZeroArrivalPhases() {
+        SimulationRun run = engine.create(VENUE, 100, 5, 0,
+                List.of(new ArrivalPhase(0, 2, 10), new ArrivalPhase(2, 4, 0)), false);
+
+        engine.advanceTick(VENUE, run);
+        assertThat(run.getPendingArrivals()).isEqualTo(90);
+        engine.advanceTick(VENUE, run);
+        assertThat(run.getPendingArrivals()).isEqualTo(80);
+        engine.advanceTick(VENUE, run);
+        assertThat(run.getPendingArrivals()).isEqualTo(80);
     }
 }

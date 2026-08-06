@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+*.pyc
+
+# Real Hugging Face credentials. .env.example is the committed template.
+.env

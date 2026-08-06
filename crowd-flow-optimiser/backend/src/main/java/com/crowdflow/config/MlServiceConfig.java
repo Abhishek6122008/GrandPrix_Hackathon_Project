@@ -21,9 +21,12 @@ public class MlServiceConfig {
     private String baseUrl = "http://localhost:8000";
     private String riskPath = "/predict/risk";
     private String advisoryPath = "/generate/advisory";
+    private String analyzePath = "/analyze";
     private String healthPath = "/health";
     private boolean mockEnabled = false;
     private int timeoutMs = 4000;
+    /** /analyze fans out to two Hugging Face endpoints, so it gets a much longer rope. */
+    private int analyzeTimeoutMs = 20_000;
 
     public String riskUrl() {
         return baseUrl + riskPath;
@@ -33,15 +36,33 @@ public class MlServiceConfig {
         return baseUrl + advisoryPath;
     }
 
+    public String analyzeUrl() {
+        return baseUrl + analyzePath;
+    }
+
     public String healthUrl() {
         return baseUrl + healthPath;
     }
 
     @Bean
     public RestClient mlServiceRestClient() {
+        return restClient(timeoutMs);
+    }
+
+    /**
+     * Separate client for {@code /analyze}. Sharing the 4-second one would time out on a cold
+     * Hugging Face endpoint every time, which reads as "the AI layer is broken" when it is
+     * only warming up.
+     */
+    @Bean
+    public RestClient analyzeRestClient() {
+        return restClient(analyzeTimeoutMs);
+    }
+
+    private RestClient restClient(int millis) {
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
-        factory.setConnectTimeout(Duration.ofMillis(timeoutMs));
-        factory.setReadTimeout(Duration.ofMillis(timeoutMs));
+        factory.setConnectTimeout(Duration.ofMillis(Math.min(millis, 5_000)));
+        factory.setReadTimeout(Duration.ofMillis(millis));
         return RestClient.builder().requestFactory(factory).build();
     }
 
@@ -51,6 +72,10 @@ public class MlServiceConfig {
     public void setRiskPath(String riskPath) { this.riskPath = riskPath; }
     public String getAdvisoryPath() { return advisoryPath; }
     public void setAdvisoryPath(String advisoryPath) { this.advisoryPath = advisoryPath; }
+    public String getAnalyzePath() { return analyzePath; }
+    public void setAnalyzePath(String analyzePath) { this.analyzePath = analyzePath; }
+    public int getAnalyzeTimeoutMs() { return analyzeTimeoutMs; }
+    public void setAnalyzeTimeoutMs(int analyzeTimeoutMs) { this.analyzeTimeoutMs = analyzeTimeoutMs; }
     public String getHealthPath() { return healthPath; }
     public void setHealthPath(String healthPath) { this.healthPath = healthPath; }
     public boolean isMockEnabled() { return mockEnabled; }

@@ -19,6 +19,7 @@ public class SimulationRun {
     private final int crowdSize;
     private final int totalTicks;
     private final int arrivalRate;
+    private final List<ArrivalPhase> arrivalSchedule;
     private final boolean rerouteEnabled;
 
     /** nodeId -> people currently in that node. */
@@ -42,12 +43,13 @@ public class SimulationRun {
     private volatile boolean shadow;
 
     public SimulationRun(String id, String venueId, int crowdSize, int totalTicks,
-                         int arrivalRate, boolean rerouteEnabled) {
+                         int arrivalRate, List<ArrivalPhase> arrivalSchedule, boolean rerouteEnabled) {
         this.id = id;
         this.venueId = venueId;
         this.crowdSize = crowdSize;
         this.totalTicks = totalTicks;
         this.arrivalRate = arrivalRate;
+        this.arrivalSchedule = List.copyOf(arrivalSchedule);
         this.rerouteEnabled = rerouteEnabled;
         this.pendingArrivals = crowdSize;
     }
@@ -57,6 +59,12 @@ public class SimulationRun {
     public int getCrowdSize() { return crowdSize; }
     public int getTotalTicks() { return totalTicks; }
     public int getArrivalRate() { return arrivalRate; }
+    public List<ArrivalPhase> getArrivalSchedule() { return arrivalSchedule; }
+    /** Uses the phase rate when this run has a schedule; otherwise uses the legacy constant rate. */
+    public int arrivalRateAt(int tick) {
+        return arrivalSchedule.stream().filter(phase -> phase.contains(tick))
+                .findFirst().map(ArrivalPhase::arrivalRate).orElse(arrivalRate);
+    }
     public boolean isRerouteEnabled() { return rerouteEnabled; }
     public Map<String, Integer> getOccupancy() { return occupancy; }
     public List<Map<String, Integer>> getHistory() { return history; }

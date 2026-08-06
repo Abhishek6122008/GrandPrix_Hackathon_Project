@@ -4,6 +4,11 @@ server:
 spring:
   application:
     name: crowd-flow-optimiser
+  task:
+    scheduling:
+      # Two independent clocks run here: the /simulations flow ticker and the /sessions agent
+      # ticker. The default pool of 1 would make a slow tick on one stall the other.
+      pool-size: 4
 
 cors:
   # Frontend dev origins allowed to call this API / open the WebSocket.
@@ -20,17 +25,57 @@ simulation:
   # How many ticks of history the trend detector looks back over.
   trend-window: 5
 
+session:
+  # Agent-mode clock. 100 ms is the target in the architecture; the social force integration
+  # assumes one step per tick, so changing this changes how fast the crowd appears to walk.
+  tick-interval-ms: 100
+  # Broadcast every Nth tick. Ticking at 10 Hz and pushing at 5 Hz halves socket traffic
+  # without the map looking choppy.
+  broadcast-every-ticks: 2
+  # Agent positions per frame. See StateBroadcaster.samplePeople for why this is capped.
+  max-people-in-frame: 600
+  # Density snapshots retained per session, and the slice sent to the AI layer.
+  history-window: 120
+
+  # --- when the AI layer gets called -----------------------------------------
+  # A node must move this much, or cross a severity band, before /analyze is worth a call.
+  analyse-density-delta: 0.10
+  # ...and never more often than this many ticks apart. 20 ticks = 2 s at 100 ms.
+  analyse-min-ticks: 20
+
+  # --- crowd tuning (layout units per tick, not metres per second) ------------
+  # Walking speed of a solo attendee. Families move ~30% slower — see AgentFactory.
+  agent-speed: 3.2
+  # Interaction radius for agent-agent repulsion, and the spatial hash cell size.
+  neighbour-radius: 10.0
+  # Corridor half-width = edge width (metres) x this. Layout coordinates are not metres, so
+  # this is the knob that reconciles the two for a given venue file.
+  corridor-scale: 1.5
+
+social-force:
+  # Helbing-Molnar constants, in layout units per tick squared. Published values assume
+  # metres and seconds, so these are tuned, not quoted. See SocialForceModel.
+  relaxation-ticks: 3.0
+  agent-strength: 2.2
+  agent-range: 2.6
+  wall-strength: 4.0
+  wall-range: 2.0
+
 ml-service:
-  # Self-hosted FastAPI service (see ../../ml-service). Both models run in that process;
-  # nothing calls the Hugging Face Inference API at request time.
+  # FastAPI AI layer (see ../../ml-service). POST /analyze fans out to two Hugging Face
+  # Inference API endpoints; /predict/risk and /generate/advisory are the self-hosted
+  # fallback path that needs no network.
   base-url: ${ML_SERVICE_URL:http://localhost:8000}
   risk-path: /predict/risk
   advisory-path: /generate/advisory
+  analyze-path: /analyze
   health-path: /health
   # true forces the deterministic mocks without ml-service running. When false, a failed
   # call (service down, or model not loaded -> 503) still falls back to the same mocks.
   mock-enabled: false
   timeout-ms: 4000
+  # /analyze waits on two remote model calls, so it gets its own, much longer budget.
+  analyze-timeout-ms: 20000
 
 logging:
   level:

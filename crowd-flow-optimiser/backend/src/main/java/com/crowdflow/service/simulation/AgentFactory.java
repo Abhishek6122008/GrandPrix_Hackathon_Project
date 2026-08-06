@@ -1,13 +1,20 @@
 package com.crowdflow.service.simulation;
 
+import com.crowdflow.model.Person;
+import com.crowdflow.model.VenueNode;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Random;
 import org.springframework.stereotype.Component;
 
 /**
- * Builds the crowd mix for a run.
+ * Builds the crowd mix for a run: a share of families that move slower and cluster, and solo
+ * attendees that move at full speed.
  *
- * <p>Today it returns aggregate speed factors only — the tick engine is flow-based, not
- * per-agent. The signatures below are the seam for individual agents once
- * {@link SocialForceModel} is real.
+ * <p>Serves both simulation modes. {@link #cohortSpeedFactor} is the aggregate multiplier the
+ * older flow-based {@link SimulationEngine#advanceTick} scales node throughput by;
+ * {@link #createAgents} emits the individual {@link Person} agents the session tick loop
+ * integrates under the social force model.
  */
 @Component
 public class AgentFactory {
@@ -19,6 +26,12 @@ public class AgentFactory {
     private static final double FAMILY_SPEED = 0.7;
     private static final double SOLO_SPEED = 1.0;
 
+    /** Body radius in layout units. One value for everybody — see SocialForceModel on units. */
+    private static final double BODY_RADIUS = 2.0;
+
+    /** Per-person variation, so a crowd does not move as one rigid block. */
+    private static final double SPEED_JITTER = 0.15;
+
     /**
      * Weighted average walking-speed multiplier for a crowd of this size.
      * Used by {@link SimulationEngine} to scale how many people clear a node per tick.
@@ -28,11 +41,36 @@ public class AgentFactory {
     }
 
     /**
-     * TODO(day 2): emit individual agents for the social force model.
-     * Each agent needs: position, velocity, desired speed, goal node, group id.
-     * Signature will be {@code List<Agent> createAgents(int count, VenueNode spawnNode)}.
+     * Spawns {@code count} agents scattered inside {@code spawnNode}. Routes are left empty —
+     * the caller assigns them, because only it knows where these people are trying to get to.
+     *
+     * @param idPrefix    unique per session so agent ids never collide across sessions
+     * @param startIndex  running spawn counter, appended to {@code idPrefix}
+     * @param baseSpeed   layout units per tick for a solo attendee
+     * @param spawnRadius how far from the node centre people may appear
      */
-    public void createAgents(int count, String spawnNodeId) {
-        throw new UnsupportedOperationException("Per-agent simulation not implemented — see SocialForceModel");
+    public List<Person> createAgents(int count, VenueNode spawnNode, String idPrefix, int startIndex,
+                                     double baseSpeed, double spawnRadius, Random random) {
+        List<Person> agents = new ArrayList<>(Math.max(0, count));
+        for (int i = 0; i < count; i++) {
+            boolean family = random.nextDouble() < FAMILY_SHARE;
+            double speed = baseSpeed
+                    * (family ? FAMILY_SPEED : SOLO_SPEED)
+                    * (1 + (random.nextDouble() * 2 - 1) * SPEED_JITTER);
+
+            // Uniform over the disc, not the radius — sqrt keeps people from bunching at the centre.
+            double angle = random.nextDouble() * 2 * Math.PI;
+            double distance = spawnRadius * Math.sqrt(random.nextDouble());
+
+            agents.add(new Person(
+                    idPrefix + "-" + (startIndex + i),
+                    family ? Person.Type.FAMILY : Person.Type.SOLO,
+                    speed,
+                    BODY_RADIUS,
+                    spawnNode.x() + distance * Math.cos(angle),
+                    spawnNode.y() + distance * Math.sin(angle),
+                    spawnNode.id()));
+        }
+        return agents;
     }
 }
