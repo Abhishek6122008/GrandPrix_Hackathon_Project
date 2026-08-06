@@ -20,12 +20,16 @@ simulation:
   # How many ticks of history the trend detector looks back over.
   trend-window: 5
 
-hf:
-  # Set HF_TOKEN in the environment; leave mock-enabled true until the models are live.
-  token: ${HF_TOKEN:}
-  mock-enabled: true
-  gnn-endpoint: https://api-inference.huggingface.co/models/crowdflow/congestion-gnn
-  advisory-endpoint: https://api-inference.huggingface.co/models/crowdflow/advisory-generator
+ml-service:
+  # Self-hosted FastAPI service (see ../../ml-service). Both models run in that process;
+  # nothing calls the Hugging Face Inference API at request time.
+  base-url: ${ML_SERVICE_URL:http://localhost:8000}
+  risk-path: /predict/risk
+  advisory-path: /generate/advisory
+  health-path: /health
+  # true forces the deterministic mocks without ml-service running. When false, a failed
+  # call (service down, or model not loaded -> 503) still falls back to the same mocks.
+  mock-enabled: false
   timeout-ms: 4000
 
 logging:

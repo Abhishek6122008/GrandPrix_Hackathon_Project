@@ -1,10 +1,10 @@
 package com.crowdflow.service.detection;
 
-import com.crowdflow.config.HfClientConfig;
+import com.crowdflow.config.MlServiceConfig;
+import com.crowdflow.model.Alert;
 import com.crowdflow.model.Venue;
 import com.crowdflow.model.VenueEdge;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -15,11 +15,12 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
 /**
- * Calls the Hugging Face-hosted congestion-propagation GNN: given the current density of
+ * Calls the self-hosted ml-service for congestion propagation: given the current density of
  * every node, predict the risk each node carries a few ticks ahead.
  *
- * <p>Falls back to a one-hop diffusion mock whenever {@code hf.mock-enabled} is set or the
- * call fails, so local dev and the demo never block on the model being up.
+ * <p>Falls back to a one-hop diffusion mock whenever {@code ml-service.mock-enabled} is set
+ * or the call fails — service down, or up but the GNN checkpoint is missing, which
+ * ml-service answers with a 503. Local dev and the demo never block on the model being up.
  */
 @Component
 public class GnnRiskClient {
@@ -27,24 +28,30 @@ public class GnnRiskClient {
     private static final Logger log = LoggerFactory.getLogger(GnnRiskClient.class);
 
     private final RestClient restClient;
-    private final HfClientConfig config;
+    private final MlServiceConfig config;
 
-    public GnnRiskClient(RestClient hfRestClient, HfClientConfig config) {
-        this.restClient = hfRestClient;
+    public GnnRiskClient(RestClient mlServiceRestClient, MlServiceConfig config) {
+        this.restClient = mlServiceRestClient;
         this.config = config;
     }
 
-    /** nodeId -> predicted risk in [0,1] for the next few ticks. */
+    /**
+     * nodeId -> predicted risk in [0,1] for the next few ticks.
+     *
+     * @param trends per-node trend from {@link DensityDetector}; a node missing from the map
+     *               is treated as FLAT
+     */
     @SuppressWarnings("unchecked")
-    public Map<String, Double> predictRisk(Venue venue, Map<String, Double> densities) {
-        if (config.useMock()) {
+    public Map<String, Double> predictRisk(Venue venue, Map<String, Double> densities,
+                                           Map<String, Alert.Trend> trends) {
+        if (config.isMockEnabled()) {
             return mockRisk(venue, densities);
         }
         try {
             Map<String, Object> response = restClient.post()
-                    .uri(config.getGnnEndpoint())
+                    .uri(config.riskUrl())
                     .contentType(MediaType.APPLICATION_JSON)
-                    .body(Map.of("inputs", payload(venue, densities)))
+                    .body(payload(venue, densities, trends))
                     .retrieve()
                     .body(Map.class);
 
@@ -54,32 +61,32 @@ public class GnnRiskClient {
                 map.forEach((k, v) -> result.put(String.valueOf(k), ((Number) v).doubleValue()));
                 return result;
             }
-            log.warn("GNN endpoint returned an unexpected shape, using mock risk");
+            log.warn("ml-service returned an unexpected shape for /predict/risk, using mock risk");
         } catch (RuntimeException e) {
+            // Covers both "service not running" and 503 "model not loaded".
             log.warn("GNN inference failed ({}), using mock risk", e.getMessage());
         }
         return mockRisk(venue, densities);
     }
 
-    /** Node features + edge index, the shape the exported PyG model expects. See ml/gnn/model.py. */
-    private Map<String, Object> payload(Venue venue, Map<String, Double> densities) {
-        List<String> nodeIds = venue.nodes().stream().map(n -> n.id()).toList();
-        Map<String, Integer> index = new HashMap<>();
-        for (int i = 0; i < nodeIds.size(); i++) {
-            index.put(nodeIds.get(i), i);
-        }
-        List<List<Integer>> edgeIndex = new ArrayList<>();
+    /** The {nodes, edges} body ml-service expects. See ml-service/app/schemas/risk_schema.py. */
+    private Map<String, Object> payload(Venue venue, Map<String, Double> densities,
+                                        Map<String, Alert.Trend> trends) {
+        List<Map<String, Object>> nodes = venue.nodes().stream()
+                .map(node -> Map.<String, Object>of(
+                        "id", node.id(),
+                        "density", densities.getOrDefault(node.id(), 0.0),
+                        "trend", trends.getOrDefault(node.id(), Alert.Trend.FLAT).name()))
+                .toList();
+
+        List<Map<String, String>> edges = new ArrayList<>();
         for (VenueEdge edge : venue.edges()) {
-            edgeIndex.add(List.of(index.get(edge.from()), index.get(edge.to())));
+            edges.add(Map.of("source", edge.from(), "target", edge.to()));
             if (edge.bidirectional()) {
-                edgeIndex.add(List.of(index.get(edge.to()), index.get(edge.from())));
+                edges.add(Map.of("source", edge.to(), "target", edge.from()));
             }
         }
-        return Map.of(
-                "node_ids", nodeIds,
-                "density", nodeIds.stream().map(id -> densities.getOrDefault(id, 0.0)).toList(),
-                "capacity", venue.nodes().stream().map(n -> n.capacity()).toList(),
-                "edge_index", edgeIndex);
+        return Map.of("nodes", nodes, "edges", edges);
     }
 
     /**

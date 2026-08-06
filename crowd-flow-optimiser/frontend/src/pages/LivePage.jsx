@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import VenueMap from '../components/VenueMap/VenueMap.jsx';
+// Falls back to the plain marker map until the pixel-art assets are generated.
+import PixelVenueMap from '../components/VenueMap/PixelVenueMap.jsx';
 import AlertsPanel from '../components/AlertsPanel/AlertsPanel.jsx';
 import DensityGauge from '../components/shared/DensityGauge.jsx';
 import Timeline from '../components/shared/Timeline.jsx';
@@ -62,7 +63,7 @@ export default function LivePage() {
   return (
     <div className="grid grid-live">
       <div>
-        <VenueMap venue={venue} state={state} reroutePath={reroute?.path ?? []} onSelectNode={selectNode} />
+        <PixelVenueMap venue={venue} state={state} reroutePath={reroute?.path ?? []} onSelectNode={selectNode} />
         <div style={{ height: 16 }} />
         <Timeline
           tick={state.tick ?? 0}

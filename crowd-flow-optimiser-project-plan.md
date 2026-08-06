@@ -20,10 +20,19 @@ Large venues and events — stadiums, railway stations, festivals — see people
 |---|---|
 | Frontend | React (website, not mobile app) |
 | Frontend animation | 21st.dev-style motion components |
+| Frontend visuals | Pixel-art tileset + crowd sprites, generated via the PixelLab MCP server |
 | UI/design | Claude Design |
 | Backend | Spring Boot |
+| ML serving | **Python FastAPI (`ml-service/`) — self-hosted, models loaded in-process** |
 | AI layer | Hugging Face (mandatory — every team member needs an individual account and genuine use in the build) |
 | ML/model work | Python (training + exporting to HF Hub) |
+
+### Why a separate ML service
+
+Models are loaded once at FastAPI startup and inference runs locally. Nothing calls the
+Hugging Face Inference API at request time — HF is where models are trained, versioned and
+pulled *from*, not a network dependency during the demo. That removes the two things most
+likely to break on stage: a cold inference endpoint and the venue wifi.
 
 ---
 
@@ -45,7 +54,16 @@ The hackathon's balanced-difficulty rule means we can't lean purely on hand-roll
 3. **GNN risk propagation** — congestion at one node influences predicted risk at connected nodes, trained on simulated data.
 4. **Before/after comparison** — show bottleneck outcomes with no intervention vs. with our reroute suggestions applied, side by side, as the core proof that the system works.
 
+5. **Pixel-art venue rendering** — a top-down tileset per zone type plus animated crowd sprites, generated with the PixelLab MCP server. Sprite count and tint per zone are driven by live occupancy and `DensityDetector` status, so the art *is* the data rather than decoration over it.
+
 *(Stretch, only if time allows after the above: RL-based reroute policy, multi-scenario stress testing, historical pattern memory across runs.)*
+
+### The visual layer is additive, always
+
+`PixelVenueMap` renders the plain marker map whenever the generated assets are missing, and
+nothing in the density / GNN / reroute path reads from the art. The rule: the system has to
+be demonstrably correct with plain circles first. If asset generation is unfinished at
+judging time, we lose polish and nothing else.
 
 ---
 
@@ -61,19 +79,36 @@ The hackathon's balanced-difficulty rule means we can't lean purely on hand-roll
 **Backend (Spring Boot):**
 - `SimulationEngine` — tick-based crowd flow using the social force model
 - `DensityDetector` — threshold + trend logic, feeds the GNN
-- `GnnRiskClient` — calls the HF-hosted GNN model for propagation prediction
+- `GnnRiskClient` — calls `ml-service` `POST /predict/risk` for propagation prediction
 - `RerouteEngine` — Dijkstra shortest-path to nearest under-capacity node
-- `AdvisoryService` — calls HF text-generation model for plain-language alerts
+- `AdvisoryService` — calls `ml-service` `POST /generate/advisory` for plain-language alerts
+- `MlServiceConfig` — base URL from `application.yml`, never hardcoded
 - WebSocket stream for live map updates
 
-**ML (Hugging Face):**
+**ML serving (FastAPI, `ml-service/`):**
+- Both models loaded once at startup via the app lifespan, not per request
+- `POST /predict/risk` — `{nodes:[{id,density,trend}], edges:[{source,target}]}` → per-node risk
+- `POST /generate/advisory` — `{node,density,trend,reroutePath}` → one plain-language line
+- `GET /health` — reports per-model load status; Spring checks this before relying on it
+- GNN architecture imported from `ml/gnn/model.py`, so training and serving cannot drift
+
+**ML training (Hugging Face):**
 - Synthetic data generation from simulation runs
 - GNN training script + export to HF Hub
 - Prompt templates for the advisory generator
 
+### Where the fallbacks live
+
+One fallback path, in one place. `ml-service` never fakes an answer: a model that failed to
+load gives a 503. Spring catches that — and a service that is simply not running — and uses
+its own deterministic mock. Two fallback layers that could disagree about what the crowd is
+doing would be worse than none.
+
 ---
 
 ## 6. API Surface
+
+### Spring Boot (`localhost:8080`)
 
 | Endpoint | Purpose |
 |---|---|
@@ -87,34 +122,56 @@ The hackathon's balanced-difficulty rule means we can't lean purely on hand-roll
 | `GET /simulations/{id}/advisories` | Plain-language advisory feed |
 | `GET /simulations/{id}/summary` | Post-run stats + before/after |
 
+### ml-service (`localhost:8000`)
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /predict/risk` | GNN congestion propagation, per-node risk |
+| `POST /generate/advisory` | NLP plain-language advisory |
+| `GET /health` | Per-model load status, checked by Spring |
+
 ---
 
 ## 7. 4-Day Build Plan (Aug 6 → Aug 10)
 
-**Day 1 — Foundation**
+**Day 1 — Foundation** ✅ *done*
 - HF accounts for every team member
 - Venue graph data model + JSON schema
-- Basic simulation engine (flow-based, social force model added if time)
-- React project scaffold + routing
+- Simulation engine — tick-based flow respecting node capacity and edge throughput
+- React scaffold + routing, all three pages rendering on mock data
+- Reroute engine (Dijkstra), density detector, WebSocket stream, full REST surface
+- `ml-service/` FastAPI skeleton, Spring repointed at it
+- `PixelVenueMap` + asset manifest, falling back to plain markers
 
 **Day 2 — Core intelligence**
-- Density detector + trend tracking
-- Synthetic data generation for GNN training
-- Start GNN training (congestion propagation)
-- React: venue map + node density rendering
+- Generate synthetic training data (`ml/data/generate_synthetic_runs.py --runs 300`)
+- Train the congestion-propagation GNN, produce `ml/out/congestion_gnn.pt`
+- Implement `GnnRiskModel.predict` in ml-service (feature matrix + edge index)
+- **Generate the pixel-art tileset and crowd sprites via PixelLab MCP**
+- Verify `/health` reports `gnn_risk.loaded: true`
 
 **Day 3 — AI integration + UI buildout**
-- Wire GNN model into `GnnRiskClient`
-- NLP advisory generator wired into `AdvisoryService`
-- Reroute engine (Dijkstra) + overlay on map
-- Alerts panel with animations
-- Backend ↔ frontend fully connected (WebSocket live updates)
+- Implement `AdvisoryModel.generate`, pick and pin the text-gen model
+- End-to-end with mocks off: Spring → ml-service → real model output
+- Surface predicted risk on the map (the "next 3 minutes" overlay)
+- Alerts panel animations, reroute path animation
+- Decide the venue layout the demo actually runs on
 
 **Day 4 — Buffer, polish, demo prep**
-- Before/after summary screen
-- Bug fixes, edge cases (bad layouts, extreme crowd sizes)
+- Fill the real before/after numbers into `docs/demo-script.md`
+- Edge cases: venue with no exit, extreme crowd sizes, malformed layout upload
 - UI polish with Claude Design + 21st.dev animations
-- Rehearse demo script: challenge → what we built → why it matters → how it works
+- Record the fallback screen capture
+- Rehearse: challenge → what we built → why it matters → how it works
+
+### Known risks
+
+| Risk | Mitigation |
+|---|---|
+| GNN never trains well enough to beat the heuristic | Mock is a one-hop diffusion that already looks sensible; swap back and say so honestly |
+| Text-gen model too slow on a laptop | Pin a small instruct model; Spring's template fallback is already the safety net |
+| Pixel assets unfinished | `PixelVenueMap` falls back to plain markers with zero code changes |
+| Nothing runs on the day | Every tier degrades independently — frontend on mocks, Spring on mocks, ml-service optional |
 
 ---
 
@@ -122,12 +179,24 @@ The hackathon's balanced-difficulty rule means we can't lean purely on hand-roll
 
 ```
 crowd-flow-optimiser/
-├── frontend/        # React website
+├── frontend/        # React website (+ src/assets/pixel-art/ tileset and sprites)
 ├── backend/         # Spring Boot
-├── ml/              # Hugging Face model training/export
-├── sample-data/      # test venue layouts and schedules
+├── ml-service/      # FastAPI self-hosted model serving (port 8000)
+├── ml/              # training, synthetic data, HF Hub export
+├── sample-data/     # test venue layouts and schedules
 └── docs/            # system design, API contract, demo script
 ```
+
+Three services run together locally:
+
+```bash
+cd ml-service && uvicorn app.main:app --reload --port 8000
+cd backend    && ./mvnw spring-boot:run
+cd frontend   && npm run dev
+```
+
+Start order does not matter — Spring falls back to mocks whenever `ml-service` is absent,
+and the frontend renders on mock data whenever Spring is absent.
 
 ---
 
@@ -143,6 +212,10 @@ crowd-flow-optimiser/
 
 ## 10. Open Items (owner: teammate handling backend/HF specifics)
 
-- Final choice of GNN base architecture on HF Hub
-- Final choice of text-generation model for the advisory layer
-- Hosting/inference endpoint setup for both HF models
+- Final choice of GNN base architecture (currently a placeholder GraphSAGE in `ml/gnn/model.py`)
+- Final choice of text-generation model for the advisory layer (default `Qwen/Qwen2.5-0.5B-Instruct`)
+- ~~Hosting/inference endpoint setup for both HF models~~ — replaced by self-hosted `ml-service/`;
+  HF Hub is now for training artefacts and versioning, not runtime
+- Implement `GnnRiskModel.predict` and `AdvisoryModel.generate` (both raise `NotImplementedError`)
+- Generate the pixel-art assets via PixelLab MCP — see `frontend/src/assets/pixel-art/README.md`
+  for the exact filenames, tile size and sprite sheet layout the manifest expects

@@ -14,6 +14,7 @@ import com.crowdflow.service.routing.RerouteEngine;
 import com.crowdflow.service.simulation.SimulationEngine;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -105,7 +106,9 @@ public class SimulationSocketHandler extends TextWebSocketHandler implements Web
 
         if (!run.isShadow()) {
             // Predicted risk is not shown yet — it will drive the "next 3 minutes" overlay.
-            Map<String, Double> risk = gnnRiskClient.predictRisk(venue, densities);
+            Map<String, Alert.Trend> trends = new HashMap<>();
+            venue.nodes().forEach(node -> trends.put(node.id(), detector.trendOf(venue, run, node.id())));
+            Map<String, Double> risk = gnnRiskClient.predictRisk(venue, densities, trends);
             log.debug("run {} tick {} peak risk {}", run.getId(), run.getCurrentTick(),
                     risk.values().stream().mapToDouble(Double::doubleValue).max().orElse(0));
 

@@ -28,18 +28,45 @@ act on.
 | Frontend | React 19 + Vite, React Router |
 | Backend | Spring Boot 3.3, Java 21, Maven |
 | Live updates | WebSocket (`/simulations/{id}/stream`) |
-| AI | Hugging Face Inference — congestion GNN + advisory generator |
+| ML serving | FastAPI, self-hosted — congestion GNN + advisory generator loaded in-process |
 | ML tooling | Python, PyTorch + torch-geometric, huggingface_hub |
+| Visuals | Pixel-art tileset + crowd sprites (PixelLab MCP), optional reskin |
 
 ## Layout
 
 ```
 frontend/     React app — setup, live map, summary
 backend/      Spring Boot API, simulation engine, WebSocket
+ml-service/   FastAPI model serving, port 8000
 ml/           synthetic data generation, GNN training, HF export
 sample-data/  example venue layout and event schedule
 docs/         system design, API contract, demo script
 ```
+
+## Running all three services
+
+Open three terminals. **Start order does not matter** — each tier degrades on its own when
+the one below it is absent.
+
+```bash
+# 1. ML serving (port 8000)
+cd ml-service && uvicorn app.main:app --reload --port 8000
+
+# 2. Backend (port 8080)
+cd backend && ./mvnw spring-boot:run          # Windows: .\mvnw.cmd spring-boot:run
+
+# 3. Frontend (port 5173)
+cd frontend && npm run dev
+```
+
+| If this is down | What happens |
+|---|---|
+| `ml-service` | Spring uses its deterministic mocks; alerts and advisories still work |
+| `backend` | Frontend renders on mock data; every screen still navigates |
+| pixel-art assets | `PixelVenueMap` falls back to the plain marker map |
+
+Check the ML layer with `curl http://localhost:8000/health` — `status` is `ok` only when
+both models loaded, `degraded` when the service is up but an endpoint will 503.
 
 ---
 
