@@ -1,0 +1,15 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environment
+venv/
+ENV/
+env/
+
+# Environment variables (contains your HuggingFace HF_TOKEN!)
+.env
+
+# Large model cache directory (no need to push weights to GitHub)
+hf_cache/
