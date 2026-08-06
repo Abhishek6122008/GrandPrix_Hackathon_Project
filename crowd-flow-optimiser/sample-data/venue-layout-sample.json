@@ -1,0 +1,30 @@
+{
+  "id": "venue-sample",
+  "name": "Grandprix Arena — North Wing",
+  "nodes": [
+    { "id": "gate-a", "name": "Gate A", "type": "GATE", "capacity": 320, "x": 60, "y": 120 },
+    { "id": "gate-b", "name": "Gate B", "type": "GATE", "capacity": 320, "x": 60, "y": 300 },
+    { "id": "walk-north", "name": "North Walkway", "type": "WALKWAY", "capacity": 500, "x": 220, "y": 140 },
+    { "id": "walk-south", "name": "South Walkway", "type": "WALKWAY", "capacity": 500, "x": 220, "y": 300 },
+    { "id": "food-court", "name": "Food Court", "type": "CONCESSION", "capacity": 180, "x": 380, "y": 90 },
+    { "id": "merch", "name": "Merch Stand", "type": "CONCESSION", "capacity": 90, "x": 380, "y": 360 },
+    { "id": "stand-lower", "name": "Lower Stand", "type": "SEATING", "capacity": 900, "x": 400, "y": 220 },
+    { "id": "concourse", "name": "East Concourse", "type": "WALKWAY", "capacity": 450, "x": 540, "y": 220 },
+    { "id": "exit-east", "name": "Exit East", "type": "EXIT", "capacity": 400, "x": 680, "y": 160 },
+    { "id": "exit-south", "name": "Exit South", "type": "EXIT", "capacity": 260, "x": 680, "y": 320 }
+  ],
+  "edges": [
+    { "from": "gate-a", "to": "walk-north", "length": 25, "width": 6, "bidirectional": true },
+    { "from": "gate-b", "to": "walk-south", "length": 25, "width": 6, "bidirectional": true },
+    { "from": "walk-north", "to": "walk-south", "length": 30, "width": 5, "bidirectional": true },
+    { "from": "walk-north", "to": "food-court", "length": 20, "width": 4, "bidirectional": true },
+    { "from": "walk-north", "to": "stand-lower", "length": 28, "width": 7, "bidirectional": true },
+    { "from": "walk-south", "to": "merch", "length": 22, "width": 3, "bidirectional": true },
+    { "from": "walk-south", "to": "stand-lower", "length": 26, "width": 7, "bidirectional": true },
+    { "from": "food-court", "to": "concourse", "length": 30, "width": 5, "bidirectional": true },
+    { "from": "merch", "to": "concourse", "length": 32, "width": 3, "bidirectional": true },
+    { "from": "stand-lower", "to": "concourse", "length": 24, "width": 9, "bidirectional": true },
+    { "from": "concourse", "to": "exit-east", "length": 18, "width": 8, "bidirectional": true },
+    { "from": "concourse", "to": "exit-south", "length": 20, "width": 5, "bidirectional": true }
+  ]
+}
