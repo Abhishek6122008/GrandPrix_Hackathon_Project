@@ -1,0 +1,37 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: crowd-flow-optimiser
+
+cors:
+  # Frontend dev origins allowed to call this API / open the WebSocket.
+  allowed-origins:
+    - http://localhost:5173
+    - http://127.0.0.1:5173
+
+simulation:
+  # Wall-clock milliseconds between simulation ticks when a run is live.
+  tick-interval-ms: 500
+  # Node density (occupancy / capacity) thresholds for alerting.
+  warning-threshold: 0.70
+  critical-threshold: 0.85
+  # How many ticks of history the trend detector looks back over.
+  trend-window: 5
+
+ml-service:
+  # Self-hosted FastAPI service (see ../../ml-service). Both models run in that process;
+  # nothing calls the Hugging Face Inference API at request time.
+  base-url: ${ML_SERVICE_URL:http://localhost:8000}
+  risk-path: /predict/risk
+  advisory-path: /generate/advisory
+  health-path: /health
+  # true forces the deterministic mocks without ml-service running. When false, a failed
+  # call (service down, or model not loaded -> 503) still falls back to the same mocks.
+  mock-enabled: false
+  timeout-ms: 4000
+
+logging:
+  level:
+    com.crowdflow: DEBUG

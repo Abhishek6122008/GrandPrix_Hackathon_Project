@@ -1,0 +1,14 @@
+{
+  "eventId": "gp-race-day-1",
+  "venueId": "venue-sample",
+  "name": "Race Day — Qualifying",
+  "expectedAttendance": 4200,
+  "tickSeconds": 10,
+  "phases": [
+    { "name": "Doors open", "startTick": 0, "endTick": 40, "arrivalRate": 140, "note": "steady gate intake" },
+    { "name": "Pre-race rush", "startTick": 40, "endTick": 70, "arrivalRate": 320, "note": "peak load, gates back up" },
+    { "name": "Session", "startTick": 70, "endTick": 140, "arrivalRate": 20, "note": "crowd settles in seating" },
+    { "name": "Interval", "startTick": 140, "endTick": 170, "arrivalRate": 0, "note": "concession surge" },
+    { "name": "Egress", "startTick": 170, "endTick": 220, "arrivalRate": 0, "note": "everyone exits at once" }
+  ]
+}

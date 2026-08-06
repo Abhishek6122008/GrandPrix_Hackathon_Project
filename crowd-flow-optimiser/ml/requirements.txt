@@ -1,0 +1,9 @@
+# Core training + export stack.
+# torch-geometric needs a torch install first; on CPU-only machines:
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+#   pip install -r requirements.txt
+torch>=2.2
+torch-geometric>=2.5
+huggingface_hub>=0.23
+pandas>=2.2
+numpy>=1.26
