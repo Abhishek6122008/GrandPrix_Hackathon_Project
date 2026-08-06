@@ -1,5 +1,6 @@
 package com.crowdflow.websocket;
 
+import com.crowdflow.config.CorsConfig;
 import com.crowdflow.repository.SessionRepository;
 import com.crowdflow.service.broadcast.StateBroadcaster;
 import org.springframework.beans.factory.annotation.Value;
@@ -27,12 +28,15 @@ public class SessionSocketHandler extends TextWebSocketHandler implements WebSoc
 
     private final SessionRepository sessions;
     private final StateBroadcaster broadcaster;
+    private final CorsConfig corsConfig;
     private final int textBufferBytes;
 
     public SessionSocketHandler(SessionRepository sessions, StateBroadcaster broadcaster,
+                                CorsConfig corsConfig,
                                 @Value("${session.socket-buffer-bytes:524288}") int textBufferBytes) {
         this.sessions = sessions;
         this.broadcaster = broadcaster;
+        this.corsConfig = corsConfig;
         this.textBufferBytes = textBufferBytes;
     }
 
@@ -54,9 +58,15 @@ public class SessionSocketHandler extends TextWebSocketHandler implements WebSoc
         return container;
     }
 
+    /**
+     * Same origin list as the REST API. A WebSocket handshake is not covered by CORS, so
+     * leaving this open while {@code cors.allowed-origins} is pinned would mean any page on
+     * the internet could open a stream against a locally running backend.
+     */
     @Override
     public void registerWebSocketHandlers(WebSocketHandlerRegistry registry) {
-        registry.addHandler(this, "/sessions/*/stream").setAllowedOriginPatterns("*");
+        registry.addHandler(this, "/sessions/*/stream")
+                .setAllowedOriginPatterns(corsConfig.getAllowedOrigins().toArray(String[]::new));
     }
 
     @Override

@@ -3,9 +3,11 @@ package com.crowdflow.controller;
 import com.crowdflow.dto.CreateSessionRequest;
 import com.crowdflow.dto.SessionInfo;
 import com.crowdflow.dto.SessionState;
+import com.crowdflow.dto.SessionSummary;
 import com.crowdflow.model.Session;
 import com.crowdflow.service.session.SessionManager;
 import jakarta.validation.Valid;
+import java.util.List;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -63,6 +65,18 @@ public class SessionController {
     @GetMapping("/{id}")
     public SessionInfo get(@PathVariable String id) {
         return info(sessions.get(id));
+    }
+
+    /** Every live and recently finished session. Baseline twins are hidden. */
+    @GetMapping
+    public List<SessionInfo> list() {
+        return sessions.list().stream().map(this::info).toList();
+    }
+
+    /** Post-run stats and the before/after comparison. Readable while the run is still going. */
+    @GetMapping("/{id}/summary")
+    public SessionSummary summary(@PathVariable String id) {
+        return sessions.summary(id);
     }
 
     /**

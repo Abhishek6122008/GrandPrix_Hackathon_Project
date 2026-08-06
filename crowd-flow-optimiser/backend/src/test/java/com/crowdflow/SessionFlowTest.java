@@ -1,9 +1,13 @@
 package com.crowdflow;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.within;
 
 import com.crowdflow.dto.SessionInfo;
 import com.crowdflow.dto.SessionState;
+import com.crowdflow.dto.SessionSummary;
+import com.crowdflow.service.session.SessionManager;
+import com.crowdflow.service.simulation.SimulationEngine;
 import com.crowdflow.model.Alert;
 import com.crowdflow.model.Person;
 import com.crowdflow.model.Session;
@@ -48,6 +52,8 @@ import org.springframework.web.socket.handler.TextWebSocketHandler;
         "ml-service.mock-enabled=true",
         "session.tick-interval-ms=20",   // run the clock fast so the test is not slow
         "session.broadcast-every-ticks=1",
+        "session.retain-after-finish-ms=0",      // evict as soon as the sweep is asked to
+        "session.evict-interval-ms=3600000",     // ...but only when a test asks; never on its own
         "logging.level.com.crowdflow=INFO"
 })
 class SessionFlowTest {
@@ -57,6 +63,12 @@ class SessionFlowTest {
 
     @Autowired
     private TestRestTemplate rest;
+
+    @Autowired
+    private SessionManager sessionManager;
+
+    @Autowired
+    private SimulationEngine engine;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -175,7 +187,133 @@ class SessionFlowTest {
                 .get();
     }
 
+    /**
+     * The before/after comparison the whole system exists to produce. The twin has to actually
+     * run — a baseline stuck at tick 0 would still "compare", just meaninglessly.
+     */
+    @Test
+    void baselineTwinRunsInLockstepAndFeedsTheSummary() throws Exception {
+        String id = rest.postForEntity("/sessions",
+                Map.of("venue", VENUE, "crowdSize", 400, "arrivalRate", 10,
+                        "maxTicks", 4000, "tickSeconds", 1.0, "rerouteEnabled", true),
+                SessionInfo.class).getBody().sessionId();
+        rest.postForEntity("/sessions/{id}/start", null, SessionInfo.class, id);
+
+        awaitUntil(Duration.ofSeconds(20), () -> {
+            SessionSummary summary = rest.getForObject("/sessions/{id}/summary", SessionSummary.class, id);
+            assertThat(summary.comparisonAvailable()).as("a twin was created").isTrue();
+            assertThat(summary.baseline().spawned()).as("the twin is actually ticking").isPositive();
+            assertThat(summary.optimised().spawned()).isPositive();
+        });
+
+        // The twin ticks with its session, not behind it.
+        SessionInfo twin = rest.getForObject("/sessions/{id}", SessionInfo.class, id + "-baseline");
+        int lead = rest.getForObject("/sessions/{id}", SessionInfo.class, id).tick();
+        assertThat(twin.tick()).isCloseTo(lead, within(3));
+        assertThat(twin.rerouteEnabled()).as("the baseline is the no-intervention run").isFalse();
+
+        // ...and it stays out of the session list, which is an organiser-facing view.
+        assertThat(rest.getForObject("/sessions", SessionInfo[].class))
+                .extracting(SessionInfo::sessionId)
+                .contains(id)
+                .doesNotContain(id + "-baseline");
+
+        // Lifecycle moves both, otherwise the comparison drifts apart.
+        rest.postForEntity("/sessions/{id}/pause", null, SessionInfo.class, id);
+        assertThat(rest.getForObject("/sessions/{id}", SessionInfo.class, id + "-baseline").status())
+                .isEqualTo("PAUSED");
+        rest.postForEntity("/sessions/{id}/stop", null, SessionInfo.class, id);
+        assertThat(rest.getForObject("/sessions/{id}", SessionInfo.class, id + "-baseline").status())
+                .isEqualTo("STOPPED");
+
+        assertThat(rest.getForObject("/sessions/{id}/summary", SessionSummary.class, id).narrative())
+                .isNotBlank();
+    }
+
+    @Test
+    void finishedSessionsAreEvictedWithTheirTwin() {
+        String id = rest.postForEntity("/sessions",
+                Map.of("venue", VENUE, "crowdSize", 50, "arrivalRate", 5, "rerouteEnabled", true),
+                SessionInfo.class).getBody().sessionId();
+        rest.postForEntity("/sessions/{id}/stop", null, SessionInfo.class, id);
+
+        sessionManager.evictFinishedSessions();
+
+        assertThat(rest.getForEntity("/sessions/{id}", String.class, id).getStatusCode())
+                .isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(rest.getForEntity("/sessions/{id}", String.class, id + "-baseline").getStatusCode())
+                .as("the twin goes with it").isEqualTo(HttpStatus.NOT_FOUND);
+    }
+
+    @Test
+    void aSessionStillRunningIsNeverEvicted() {
+        String id = rest.postForEntity("/sessions",
+                Map.of("venue", VENUE, "crowdSize", 50, "arrivalRate", 5, "rerouteEnabled", false),
+                SessionInfo.class).getBody().sessionId();
+
+        sessionManager.evictFinishedSessions();
+
+        assertThat(rest.getForEntity("/sessions/{id}", String.class, id).getStatusCode())
+                .isEqualTo(HttpStatus.OK);
+    }
+
+    @Test
+    void rejectsACrowdBeyondTheMeasuredCeiling() {
+        ResponseEntity<String> response = rest.postForEntity("/sessions",
+                Map.of("venue", VENUE, "crowdSize", 50_000, "arrivalRate", 10), String.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(response.getBody()).contains("crowdSize");
+    }
+
     // ---------------------------------------------------------------- unit-level checks
+
+    /**
+     * Walking speed has to come from the venue's own scale. A layout drawn at twice the
+     * coordinates is the same venue and must not walk at half the apparent pace.
+     */
+    @Test
+    void agentSpeedScalesWithTheVenueRatherThanBeingAbsolute() {
+        Venue big = new Venue("venue-big", "Big",
+                VENUE.nodes().stream()
+                        .map(n -> new VenueNode(n.id(), n.name(), n.type(), n.capacity(), n.x() * 2, n.y() * 2))
+                        .toList(),
+                VENUE.edges());
+
+        double small = engine.agentSpeedFor(VENUE);
+        double large = engine.agentSpeedFor(big);
+
+        assertThat(large / small).isCloseTo(2.0, within(0.01));
+        assertThat(small).isPositive();
+    }
+
+    /** The alert feed must not grow without bound over a long run. */
+    @Test
+    void alertFeedIsBoundedAndOnlyRecordsSeverityChanges() {
+        Session session = new Session("sess-feed", VENUE, 100, 10, 500, 1.0, true);
+
+        assertThat(session.addAlertIfChanged(alertFor("walk", Alert.Severity.WARNING))).isTrue();
+        assertThat(session.addAlertIfChanged(alertFor("walk", Alert.Severity.WARNING)))
+                .as("same severity again is not news").isFalse();
+        assertThat(session.addAlertIfChanged(alertFor("walk", Alert.Severity.CRITICAL))).isTrue();
+        assertThat(session.getBottleneckNodes()).containsExactly("walk");
+
+        // A node that recovers is forgotten, so its next jam alerts again rather than staying
+        // silent for the rest of the run.
+        session.clearSeverity("walk");
+        assertThat(session.addAlertIfChanged(alertFor("walk", Alert.Severity.CRITICAL))).isTrue();
+
+        for (int i = 0; i < 800; i++) {
+            session.clearSeverity("walk");
+            session.addAlertIfChanged(alertFor("walk", Alert.Severity.CRITICAL));
+        }
+        assertThat(session.getAlerts()).hasSizeLessThanOrEqualTo(300);
+    }
+
+    private Alert alertFor(String nodeId, Alert.Severity severity) {
+        return new Alert("alert-x", 1, nodeId, severity, 0.9, Alert.Trend.RISING, "msg");
+    }
+
 
     @Test
     void socialForceDrivesTowardTheGoalAndPushesAgentsApart() {

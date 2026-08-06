@@ -121,7 +121,7 @@ public class FastApiClient {
         }
         if (response.hasAdvisory()) {
             session.setLatestAdvisory(response.advisory().message().trim());
-            session.getAdvisories().add("t%d · %s".formatted(tick, response.advisory().message().trim()));
+            session.addAdvisory("t%d · %s".formatted(tick, response.advisory().message().trim()));
         }
 
         String status = response.status() == null ? "unknown" : response.status();
