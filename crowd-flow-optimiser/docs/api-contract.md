@@ -36,15 +36,34 @@ Uploads a venue layout **and** creates a session in one call. The venue is also 
 }
 ```
 
-`venue` is the same shape as `POST /venues` below. `crowdSize` 1–20000, `arrivalRate` 1–2000
+`venue` is the same shape as `POST /venues` below. `crowdSize` 1–10000, `arrivalRate` 1–2000
 (people admitted per tick, split across gates). `maxTicks` defaults to 1200, `tickSeconds` to
 1.0, `rerouteEnabled` to true.
+
+The `crowdSize` ceiling is measured, not guessed: one tick costs ~13 ms at 2,500 agents,
+~58 ms at 10,000 and ~112 ms at 20,000 — past the 100 ms tick budget, where the simulated
+clock quietly starts running slower than the wall clock. Raise it only alongside a
+re-measurement, and note a baseline twin doubles the real agent count.
 
 **400** if the venue has no `GATE` node, has duplicate node ids, or has an edge referencing a
 node that does not exist. A venue with **no `EXIT`** is accepted on purpose — it is a scenario
 worth simulating, and the detector will light the whole venue up, which is the right answer.
 
 **201** — `SessionInfo` (see `GET /sessions/{id}`). Status is `CREATED`; nothing ticks yet.
+
+### The baseline twin
+
+When `rerouteEnabled` is true, a second session is created at `{id}-baseline`: same venue,
+same crowd, **same seed**, rerouting off. It ticks in lockstep, is never broadcast and never
+sent to the AI layer, and is hidden from `GET /sessions`. It exists so
+`GET /sessions/{id}/summary` can compare two runs that differ only by the intervention.
+
+Sharing the seed means both runs draw the same crowd — same mix of families and solo
+attendees, same walking speeds, same spawn scatter. Arrival *volume* still differs, because
+holding intake at a critical gate is precisely the intervention being measured.
+
+`start`, `pause` and `stop` on a session always move its twin too. You can read the twin
+directly at `GET /sessions/{id}-baseline` if you want its raw numbers.
 
 ---
 
@@ -58,6 +77,10 @@ worth simulating, and the detector will light the whole venue up, which is the r
 
 Status is one of `CREATED`, `RUNNING`, `PAUSED`, `STOPPED`, `COMPLETED`. `COMPLETED` is
 reached on its own when `maxTicks` is hit or the whole crowd has left.
+
+A session that reaches `STOPPED` or `COMPLETED` is evicted, with its twin, after
+`session.retain-after-finish-ms` (default 10 minutes) and then 404s. Nothing here survives a
+restart anyway; the sweep stops a long demo accumulating dead runs in memory.
 
 ---
 
@@ -81,10 +104,53 @@ is down the session keeps running on measured density and this says so.
 
 ---
 
+## `GET /sessions`
+
+**200** — an array of `SessionInfo`, every live and recently finished session. Baseline twins
+are hidden.
+
+---
+
 ## `GET /sessions/{id}/state`
 
 **200** — the same frame the WebSocket pushes, for clients that would rather poll. `null`
 before the first frame is published.
+
+---
+
+## `GET /sessions/{id}/summary`
+
+Post-run stats and the before/after comparison. Readable while the run is still going — the
+numbers are running totals, not final ones.
+
+**200**
+```json
+{
+  "sessionId": "sess-1b1f94d8", "venueId": "venue-sample", "venueName": "...",
+  "status": "STOPPED", "ticks": 296, "simulationSeconds": 592.0,
+  "comparisonAvailable": true,
+  "baseline":  { "peakDensity": 4.48, "criticalNodeTicks": 676, "bottleneckCount": 3,
+                 "spawned": 3000, "exited": 510, "stillInside": 2490 },
+  "optimised": { "peakDensity": 0.95, "criticalNodeTicks": 489, "bottleneckCount": 5,
+                 "spawned": 2485, "exited": 425, "stillInside": 2060 },
+  "narrative": "Rerouting cut time above the critical threshold by 28% (676 to 489 zone-ticks), and held the worst zone to 95% of capacity instead of 448%."
+}
+```
+
+`comparisonAvailable` is false when the session ran with `rerouteEnabled: false` — there is no
+twin, so `baseline` and `optimised` are the same numbers and the narrative says so rather than
+implying a comparison that never happened.
+
+Read `criticalNodeTicks` as the headline safety number. The other two mislead if quoted alone:
+
+- `peakDensity` is pinned at 1.0 by any single undersized zone, so it barely moves between runs
+  that are wildly different everywhere else. It is worth quoting here only because the
+  untreated run blows past it — 4.48 means a gate packed to 448% of capacity.
+- `bottleneckCount` usually goes **up** when rerouting works, because spreading a crowd out
+  touches more zones. Above, 3 → 5 zones is the system working, not failing.
+- Exits are deliberately absent from the narrative. The untreated run typically gets *more*
+  people through, by packing gates several times over capacity — the exact thing being
+  prevented. Quoted side by side without that context it reads as rerouting being worse.
 
 ---
 
@@ -93,6 +159,10 @@ before the first frame is published.
 Organiser and viewers connect to the same path and receive identical frames. The current
 frame is pushed on connect, so a late joiner never sees a blank map. Read-only: inbound
 messages are ignored and cannot perturb the simulation.
+
+Handshakes are restricted to the same `cors.allowed-origins` list as the REST API. A
+WebSocket handshake is not covered by CORS, so leaving it open while the REST API is pinned
+would let any page on the internet stream from a locally running backend.
 
 Frames are pushed every `session.broadcast-every-ticks` ticks (default 2, so ~5/second at the
 default 100 ms tick).

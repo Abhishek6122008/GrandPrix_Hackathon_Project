@@ -5,6 +5,8 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -34,22 +36,49 @@ public class Session {
     private final int maxTicks;
     private final double tickSeconds;
     private final boolean rerouteEnabled;
-    private final long createdAtMillis = System.currentTimeMillis();
+    /**
+     * Shared by a session and its baseline twin so both draw the same crowd — same mix of
+     * families and solo attendees, same walking speeds, same spawn scatter. Without it the
+     * before/after comparison is measuring two different crowds and proves nothing.
+     *
+     * <p>Arrival <em>volume</em> still differs between the two, because holding intake at a
+     * critical gate is exactly the intervention being measured.
+     */
+    private final long seed;
 
     // --- tick-thread only -------------------------------------------------
     private final List<Person> people = new ArrayList<>();
     /** Rolling density snapshots, oldest first. Bounded — see SessionManager.historyWindow. */
     private final List<Map<String, Double>> densityHistory = new ArrayList<>();
-    private int spawned;
-    private int exited;
+    /**
+     * Read from request threads via {@code GET /sessions/{id}}, written by the tick thread —
+     * hence volatile. Non-atomic increments are safe only because the tick thread is the sole
+     * writer; two writers would need an adder.
+     */
+    private volatile int spawned;
+    private volatile int exited;
     /** Running safety totals, accumulated every tick so they survive broadcast decimation. */
     private volatile double peakDensity;
     private volatile int criticalNodeTicks;
+    /** Distinct zones that went critical at any point — the summary's bottleneck count. */
+    private final Set<String> bottleneckNodes = ConcurrentHashMap.newKeySet();
+    /** Last severity reported per node, so the alert feed only records actual changes. */
+    private final Map<String, Alert.Severity> lastSeverity = new ConcurrentHashMap<>();
 
     // --- shared -----------------------------------------------------------
+    // Bounded: a long run with density oscillating around a threshold appends forever
+    // otherwise, and nothing ever reads the old entries.
+    private static final int MAX_FEED = 300;
     private final List<Alert> alerts = new CopyOnWriteArrayList<>();
     private final List<String> advisories = new CopyOnWriteArrayList<>();
     private final List<ReroutePath> reroutes = new CopyOnWriteArrayList<>();
+
+    /** Set of the paired no-intervention run, when this session has one. */
+    private volatile String baselineSessionId;
+    /** True for that paired run itself — it is simulated but never broadcast or analysed. */
+    private volatile boolean shadow;
+    /** When this session reached a terminal status, for the eviction sweep. 0 while live. */
+    private volatile long finishedAtMillis;
 
     /** Latest per-node risk from the AI layer; empty until the first successful analyse. */
     private volatile Map<String, Double> predictedRisk = Map.of();
@@ -69,6 +98,12 @@ public class Session {
 
     public Session(String id, Venue venue, int crowdSize, int arrivalRate, int maxTicks,
                    double tickSeconds, boolean rerouteEnabled) {
+        this(id, venue, crowdSize, arrivalRate, maxTicks, tickSeconds, rerouteEnabled,
+                System.nanoTime());
+    }
+
+    public Session(String id, Venue venue, int crowdSize, int arrivalRate, int maxTicks,
+                   double tickSeconds, boolean rerouteEnabled, long seed) {
         this.id = id;
         this.venue = venue;
         this.crowdSize = crowdSize;
@@ -76,6 +111,15 @@ public class Session {
         this.maxTicks = maxTicks;
         this.tickSeconds = tickSeconds;
         this.rerouteEnabled = rerouteEnabled;
+        this.seed = seed;
+    }
+
+    /** A no-intervention twin of this session: same venue, same crowd, same arrivals, no rerouting. */
+    public Session baselineTwin(String twinId) {
+        Session twin = new Session(twinId, venue, crowdSize, arrivalRate, maxTicks, tickSeconds,
+                false, seed);
+        twin.shadow = true;
+        return twin;
     }
 
     /** People currently in the venue, grouped by the node they are counted against. */
@@ -99,7 +143,11 @@ public class Session {
     public int getMaxTicks() { return maxTicks; }
     public double getTickSeconds() { return tickSeconds; }
     public boolean isRerouteEnabled() { return rerouteEnabled; }
-    public long getCreatedAtMillis() { return createdAtMillis; }
+    public long getSeed() { return seed; }
+    public String getBaselineSessionId() { return baselineSessionId; }
+    public boolean isShadow() { return shadow; }
+    public long getFinishedAtMillis() { return finishedAtMillis; }
+    public Set<String> getBottleneckNodes() { return bottleneckNodes; }
     public List<Person> getPeople() { return people; }
     public List<Map<String, Double>> getDensityHistory() { return densityHistory; }
     public int getSpawned() { return spawned; }
@@ -117,7 +165,48 @@ public class Session {
     public int getTick() { return tick; }
     public SessionState getLatestState() { return latestState; }
 
-    public void setStatus(Status status) { this.status = status; }
+    public void setBaselineSessionId(String id) { this.baselineSessionId = id; }
+
+    /** Stamps the finish time the first time a terminal status is set, for the eviction sweep. */
+    public void setStatus(Status status) {
+        this.status = status;
+        if ((status == Status.STOPPED || status == Status.COMPLETED) && finishedAtMillis == 0) {
+            finishedAtMillis = System.currentTimeMillis();
+        }
+    }
+
+    /** Appends to a feed, dropping the oldest entries once it is over {@link #MAX_FEED}. */
+    private static <T> void append(List<T> feed, T item) {
+        feed.add(item);
+        while (feed.size() > MAX_FEED) {
+            feed.remove(0);
+        }
+    }
+
+    /**
+     * Records an alert only when the node's severity actually changed.
+     *
+     * @return true if it was recorded — the caller uses that to decide whether to reroute
+     */
+    public boolean addAlertIfChanged(Alert alert) {
+        if (lastSeverity.put(alert.nodeId(), alert.severity()) == alert.severity()) {
+            return false;
+        }
+        append(alerts, alert);
+        if (alert.severity() == Alert.Severity.CRITICAL) {
+            bottleneckNodes.add(alert.nodeId());
+        }
+        return true;
+    }
+
+    /** Forgets a node's severity once it is back to OK, so a later jam alerts again. */
+    public void clearSeverity(String nodeId) {
+        lastSeverity.remove(nodeId);
+    }
+
+    public void addAdvisory(String advisory) { append(advisories, advisory); }
+
+    public void addReroutes(List<ReroutePath> paths) { paths.forEach(path -> append(reroutes, path)); }
     public void setTick(int tick) { this.tick = tick; }
     public void setLatestState(SessionState state) { this.latestState = state; }
     public void setPredictedRisk(Map<String, Double> risk) { this.predictedRisk = risk; }

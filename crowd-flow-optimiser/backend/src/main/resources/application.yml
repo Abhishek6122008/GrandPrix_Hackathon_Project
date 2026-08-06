@@ -36,6 +36,15 @@ session:
   max-people-in-frame: 600
   # Density snapshots retained per session, and the slice sent to the AI layer.
   history-window: 120
+  # Max text frame the WebSocket accepts. Well above the 8KB servlet default, which closes
+  # the connection on an oversized frame rather than truncating it.
+  socket-buffer-bytes: 524288
+
+  # --- housekeeping ----------------------------------------------------------
+  # How long a STOPPED/COMPLETED session is kept before eviction. Nothing here outlives the
+  # process anyway; this stops a long demo session accumulating dead runs in memory.
+  retain-after-finish-ms: 600000
+  evict-interval-ms: 60000
 
   # --- when the AI layer gets called -----------------------------------------
   # A node must move this much, or cross a severity band, before /analyze is worth a call.
@@ -43,9 +52,12 @@ session:
   # ...and never more often than this many ticks apart. 20 ticks = 2 s at 100 ms.
   analyse-min-ticks: 20
 
-  # --- crowd tuning (layout units per tick, not metres per second) ------------
-  # Walking speed of a solo attendee. Families move ~30% slower — see AgentFactory.
-  agent-speed: 3.2
+  # --- crowd tuning ----------------------------------------------------------
+  # Roughly how many ticks a solo attendee takes to walk a typical corridor. Walking speed is
+  # derived from this and the venue's own median edge length, so the same value behaves the
+  # same on a layout drawn at any scale. Lower it to make the crowd move faster.
+  # Families move ~30% slower — see AgentFactory.
+  ticks-per-edge: 50
   # Interaction radius for agent-agent repulsion, and the spatial hash cell size.
   neighbour-radius: 10.0
   # Corridor half-width = edge width (metres) x this. Layout coordinates are not metres, so

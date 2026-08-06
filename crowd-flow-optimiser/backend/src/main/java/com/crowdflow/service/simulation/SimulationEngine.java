@@ -45,9 +45,12 @@ public class SimulationEngine {
     private final SocialForceModel socialForceModel;
     private final RerouteEngine routeEngine;
     private final double criticalThreshold;
-    private final double agentSpeed;
+    private final double ticksPerEdge;
     private final double neighbourRadius;
     private final double corridorScale;
+
+    /** Walking speed in layout units per tick, per venue. See {@link #agentSpeedFor}. */
+    private final Map<String, Double> speedCache = new ConcurrentHashMap<>();
 
     /** Hop distance to the nearest exit, per venue. Layouts are immutable once uploaded. */
     private final Map<String, Map<String, Integer>> hopCache = new ConcurrentHashMap<>();
@@ -58,14 +61,14 @@ public class SimulationEngine {
     public SimulationEngine(AgentFactory agentFactory, SocialForceModel socialForceModel,
                             RerouteEngine routeEngine,
                             @Value("${simulation.critical-threshold:0.85}") double criticalThreshold,
-                            @Value("${session.agent-speed:3.2}") double agentSpeed,
+                            @Value("${session.ticks-per-edge:50}") double ticksPerEdge,
                             @Value("${session.neighbour-radius:10.0}") double neighbourRadius,
                             @Value("${session.corridor-scale:1.5}") double corridorScale) {
         this.agentFactory = agentFactory;
         this.socialForceModel = socialForceModel;
         this.routeEngine = routeEngine;
         this.criticalThreshold = criticalThreshold;
-        this.agentSpeed = agentSpeed;
+        this.ticksPerEdge = Math.max(1, ticksPerEdge);
         this.neighbourRadius = neighbourRadius;
         this.corridorScale = corridorScale;
     }
@@ -73,7 +76,38 @@ public class SimulationEngine {
     /** Flow-mode-only constructor, for tests that never touch agent mode. */
     public SimulationEngine(AgentFactory agentFactory, SocialForceModel socialForceModel,
                             double criticalThreshold) {
-        this(agentFactory, socialForceModel, new RerouteEngine(0.70), criticalThreshold, 3.2, 10.0, 1.5);
+        this(agentFactory, socialForceModel, new RerouteEngine(0.70), criticalThreshold, 50, 10.0, 1.5);
+    }
+
+    /**
+     * Walking speed for a venue, in layout units per tick.
+     *
+     * <p>Derived from the venue's own scale rather than fixed: node coordinates are arbitrary
+     * layout units, so an absolute speed makes a venue authored at half the scale appear to
+     * walk twice as fast for no stated reason. The tunable is
+     * {@code session.ticks-per-edge} — roughly how many ticks it should take to walk a typical
+     * corridor — which means the same thing on every layout.
+     *
+     * <p>Median rather than mean: one long perimeter edge should not slow the whole venue down.
+     */
+    public double agentSpeedFor(Venue venue) {
+        return speedCache.computeIfAbsent(venue.id() == null ? venue.name() : venue.id(), key -> {
+            Map<String, VenueNode> nodesById = venue.nodesById();
+            double[] lengths = venue.edges().stream()
+                    .mapToDouble(edge -> {
+                        VenueNode from = nodesById.get(edge.from());
+                        VenueNode to = nodesById.get(edge.to());
+                        return from == null || to == null ? Double.NaN
+                                : Math.hypot(to.x() - from.x(), to.y() - from.y());
+                    })
+                    .filter(length -> !Double.isNaN(length) && length > 0)
+                    .sorted()
+                    .toArray();
+            if (lengths.length == 0) {
+                return 3.0; // degenerate layout — every node on one spot
+            }
+            return Math.max(0.2, lengths[lengths.length / 2] / ticksPerEdge);
+        });
     }
 
     public SimulationRun create(Venue venue, int crowdSize, int ticks, int arrivalRate, boolean rerouteEnabled) {
@@ -308,7 +342,9 @@ public class SimulationEngine {
         }
 
         Map<String, Integer> occupancy = session.occupancy();
-        Random random = new Random(session.getId().hashCode() * 31L + session.getTick());
+        // Seeded from the session, not its id, so a baseline twin draws the same crowd mix and
+        // spawn scatter. Any difference between the two runs is then the intervention, not luck.
+        Random random = new Random(session.getSeed() * 31L + session.getTick());
         int spawnedThisTick = 0;
 
         for (int i = 0; i < gates.size(); i++) {
@@ -324,7 +360,8 @@ public class SimulationEngine {
 
             ReroutePath toExit = routeEngine.nearestExit(venue, gate.id());
             List<Person> arrivals = agentFactory.createAgents(share, gate, session.getId(),
-                    session.getSpawned() + spawnedThisTick, agentSpeed, nodeRadius(gate) * 0.8, random);
+                    session.getSpawned() + spawnedThisTick, agentSpeedFor(venue),
+                    nodeRadius(gate) * 0.8, random);
             for (Person person : arrivals) {
                 if (toExit.toNodeId() != null) {
                     person.setRoute(toExit.path().subList(1, toExit.path().size()));
