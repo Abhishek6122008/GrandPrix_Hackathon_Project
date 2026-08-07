@@ -1,0 +1,10 @@
+# Everything the AI service needs. No torch, no transformers, no model download.
+# The offline model in app/scoring.py is closed-form Python, so this is the whole list.
+fastapi>=0.115
+uvicorn[standard]>=0.32
+pydantic>=2.9
+python-dotenv>=1.0
+
+# Only used when Hugging Face inference is configured (HF_API_TOKEN + HF_*_URL).
+# Harmless to install either way, and small.
+httpx>=0.27
