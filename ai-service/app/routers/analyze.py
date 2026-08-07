@@ -30,6 +30,7 @@ from app import scoring
 from app.clients import hf_gnn_client, hf_llm_client
 from app.clients.hf_gnn_client import HfResult
 from app.config import settings
+from app.gnn_local import local_gnn
 from app.schemas.analyze_schema import Advisory, AnalyzeRequest, AnalyzeResponse
 from app.services import postprocessing, preprocessing
 
@@ -59,13 +60,30 @@ async def analyze(request: AnalyzeRequest):
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     # --- Step 3: predicted congestion, a few ticks ahead. -------------------
+    # Three sources, best first. Each is a real deployment mode rather than defensive
+    # layering: hosted inference is the architecture diagram's path, the in-process GNN is
+    # what the project plan calls for (Hugging Face as the model registry, not a per-request
+    # dependency), and the linear model is what makes a clean checkout work with no setup.
     gnn_result = HfResult(error="hugging face GNN not configured")
+
     if settings.hf_gnn_configured:
         gnn_result = await hf_gnn_client.predict_risk(
             features.node_ids, features.features, features.edge_index
         )
         if not gnn_result.ok:
-            log.warning("hosted GNN failed, falling back to local: %s", gnn_result.error)
+            log.warning("hosted GNN failed, falling back: %s", gnn_result.error)
+
+    if not gnn_result.ok and local_gnn.ready:
+        try:
+            gnn_result = HfResult(
+                value=local_gnn.predict(
+                    features.node_ids, features.features, features.edge_index
+                ),
+                model=f"congestion-gnn ({local_gnn.source})",
+            )
+        except Exception as exc:  # noqa: BLE001 — a bad tensor must not 500 the endpoint
+            log.warning("local GNN inference failed: %s", exc)
+            gnn_result = HfResult(error=f"local GNN: {exc}")
 
     if not gnn_result.ok and settings.LOCAL_FALLBACK:
         gnn_result = HfResult(

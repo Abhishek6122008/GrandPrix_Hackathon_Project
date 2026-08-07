@@ -29,6 +29,23 @@ HORIZON = 5
 # Share of a node's occupants that try to move each tick, by node type.
 MOBILITY = {"WALKWAY": 0.80, "GATE": 0.70, "CONCESSION": 0.25, "SEATING": 0.10, "EXIT": 1.0}
 
+# --- Feature definitions, mirrored from the serving path -----------------------------------
+# Every constant below exists in the running system too. The generator has to reproduce them
+# exactly, because a model trained on a differently-defined feature is being asked a different
+# question at inference time than the one it learned to answer.
+
+#: Ticks the trend is measured over. Mirrors `simulation.trend-window` in application.yml and
+#: DensityDetector.trendsOf.
+TREND_WINDOW = 5
+
+#: Dead band before a change counts as RISING or FALLING. Mirrors DensityDetector's +/-0.03 —
+#: without it, float noise would label a perfectly steady zone as moving.
+TREND_DEADBAND = 0.03
+
+#: Frames of history the backend ships to /analyze, and therefore the span `density_delta`
+#: covers. Mirrors FastApiClient.HISTORY_FRAMES.
+HISTORY_FRAMES = 12
+
 
 def load_layout(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
@@ -136,11 +153,55 @@ def simulate(layout: dict, crowd_size: int, ticks: int, arrival_rate: int,
     return history
 
 
+def static_features(layout: dict) -> dict[str, dict[str, float]]:
+    """
+    The per-node features that depend only on the venue, not on the run.
+
+    Computed exactly as `preprocessing.build_features` does at serving time: normalised against
+    the largest capacity and the highest degree *in this venue*, not against absolute figures.
+    That is what lets one model serve venues of wildly different sizes.
+    """
+    adj = adjacency(layout)
+    max_capacity = max((n["capacity"] for n in layout["nodes"]), default=1) or 1
+
+    # Degree counts distinct neighbours, matching the service's `neighbours` set — an
+    # edge list that names the same pair twice must not inflate a node's degree.
+    degree = {n["id"]: len({e["to"] for e in adj[n["id"]]}) for n in layout["nodes"]}
+    max_degree = max(degree.values(), default=1) or 1
+
+    return {
+        n["id"]: {
+            "capacity_norm": n["capacity"] / max_capacity,
+            "degree_norm": degree[n["id"]] / max_degree,
+        }
+        for n in layout["nodes"]
+    }
+
+
+def encode_trend(now: float, then: float) -> float:
+    """DensityDetector's rule, as the number the model sees. See TREND_DEADBAND."""
+    delta = now - then
+    if delta > TREND_DEADBAND:
+        return 1.0
+    return -1.0 if delta < -TREND_DEADBAND else 0.0
+
+
 def build_samples(layout: dict, runs: int, seed: int) -> list[dict]:
-    """One row per (run, tick, node): current density + the label HORIZON ticks later."""
+    """
+    One row per (run, tick, node): the six serving features plus the label HORIZON ticks later.
+
+    Columns and their order are dictated by `ml/gnn/model.py::FEATURE_COLUMNS`, which in turn
+    mirrors the service. Do not add a column here without adding it in both.
+    """
     rng = random.Random(seed)
     node_ids = [n["id"] for n in layout["nodes"]]
     rows: list[dict] = []
+
+    # Hoisted out of the row loop below. The layout never changes, and rebuilding this per
+    # (run, tick, node) meant constructing the whole adjacency map a few million times for a
+    # 300-run generation — minutes of pure waste before a single sample was written.
+    adj = adjacency(layout)
+    static = static_features(layout)
 
     for run_id in range(runs):
         crowd = rng.randint(1_500, 9_000)
@@ -149,18 +210,31 @@ def build_samples(layout: dict, runs: int, seed: int) -> list[dict]:
         history = simulate(layout, crowd, ticks=80, arrival_rate=arrival, reroute=reroute, rng=rng)
 
         for tick in range(len(history) - HORIZON):
+            # Both look back as far as the window allows and no further, exactly as the service
+            # does early in a run when it has not accumulated a full history yet.
+            trend_base = history[max(0, tick - TREND_WINDOW)]
+            delta_base = history[max(0, tick - HISTORY_FRAMES)]
+
             for node_id in node_ids:
+                density = history[tick][node_id]
                 rows.append({
                     "run_id": run_id,
                     "tick": tick,
                     "node_id": node_id,
-                    "density": round(history[tick][node_id], 4),
+                    # --- the six feature columns, in FEATURE_COLUMNS order ---
+                    "density": round(density, 4),
+                    "trend": encode_trend(density, trend_base[node_id]),
+                    "capacity_norm": round(static[node_id]["capacity_norm"], 4),
+                    "degree_norm": round(static[node_id]["degree_norm"], 4),
                     "neighbour_max_density": round(
-                        max((history[tick][e["to"]] for e in adjacency(layout)[node_id]), default=0.0), 4),
+                        max((history[tick][e["to"]] for e in adj[node_id]), default=0.0), 4),
+                    "density_delta": round(density - delta_base[node_id], 4),
+                    # --- label ---
+                    "density_ahead": round(history[tick + HORIZON][node_id], 4),
+                    # --- context, kept for analysis; NOT fed to the model ---
                     "crowd_size": crowd,
                     "arrival_rate": arrival,
                     "reroute": int(reroute),
-                    "density_ahead": round(history[tick + HORIZON][node_id], 4),
                 })
     return rows
 
@@ -202,6 +276,22 @@ def self_check() -> None:
 
     rows = build_samples(layout, runs=1, seed=7)
     assert rows and set(rows[0]) >= {"density", "density_ahead", "node_id"}
+
+    # The feature contract. Duplicated here as a literal rather than imported from
+    # ml/gnn/model.py on purpose — this module is stdlib-only so it can run before anyone
+    # installs torch. ai-service/tests/test_feature_contract.py is what keeps the copies honest.
+    expected = ["density", "trend", "capacity_norm", "degree_norm",
+                "neighbour_max_density", "density_delta"]
+    emitted = [key for key in rows[0] if key in set(expected)]
+    assert emitted == expected, f"feature columns drifted: emitted {emitted}, expected {expected}"
+
+    # Trend must actually vary, or the column is a constant the model will learn to ignore.
+    trends = {row["trend"] for row in rows}
+    assert trends >= {1.0, 0.0}, f"trend column is degenerate: only saw {trends}"
+
+    # A label that never moves means the run never congested and there is nothing to learn.
+    assert max(row["density_ahead"] for row in rows) > 0.5, "no congestion in the sample run"
+
     print("self-check ok")
 
 

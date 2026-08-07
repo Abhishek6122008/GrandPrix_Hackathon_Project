@@ -34,13 +34,37 @@ Request and response shapes mirror the Java records in
 
 ---
 
-## Two inference paths
+## Three inference paths
 
-Every step runs against Hugging Face when it is configured, and against the offline model in
-[`app/scoring.py`](app/scoring.py) when it is not. The choice is made **per step**: a working
-GNN endpoint and a missing LLM one gives hosted risk with locally written prose.
+Tried best-first, and the choice is made **per step** — a working GNN endpoint with a missing
+LLM one gives hosted risk with locally written prose. Whichever answered is named in
+`modelInfo` on every response, so nobody has to guess.
 
-Whichever answered is named in `modelInfo` on every response, so nobody has to guess.
+1. **Hugging Face Inference API** — when `HF_API_TOKEN` and the matching `HF_*_URL` are set.
+2. **In-process GNN** ([`app/gnn_local.py`](app/gnn_local.py)) — the trained congestion GNN,
+   checkpoint pulled from the Hub once at startup and run locally thereafter. This is the path
+   the project plan calls for: Hugging Face as the model registry, not a per-request network
+   dependency. Needs torch + torch-geometric, which are deliberately **not** in
+   `requirements.txt`; without them the service says so at `/health` and moves on.
+3. **Offline linear model** ([`app/scoring.py`](app/scoring.py)) — always available, no setup.
+
+### The feature contract
+
+All three paths feed the model the same six columns, in this order:
+
+```
+density, trend, capacity_norm, degree_norm, neighbour_max_density, density_delta
+```
+
+That order is defined by `FEATURE_COLUMNS` in
+[`app/services/preprocessing.py`](app/services/preprocessing.py) and duplicated in
+`ml/gnn/model.py` and `ml/data/generate_synthetic_runs.py`. Nothing at runtime checks the
+copies agree, and a mismatch does not raise — it silently reads the wrong number in every
+slot. [`tests/test_feature_contract.py`](tests/test_feature_contract.py) is what catches it.
+
+This is not hypothetical: the GNN was previously trained on four different columns, two of
+which (`arrival_rate`, `reroute`) the serving path cannot even produce per node, so the trained
+model could never have been deployed at all.
 
 ### The offline model
 

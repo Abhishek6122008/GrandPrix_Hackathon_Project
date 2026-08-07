@@ -14,8 +14,25 @@ import torch
 import torch.nn as nn
 from torch_geometric.nn import SAGEConv
 
-# Node features produced by data/generate_synthetic_runs.py.
-FEATURE_COLUMNS = ["density", "neighbour_max_density", "arrival_rate", "reroute"]
+# Node features, in the exact order the model is fed them.
+#
+# THIS LIST IS NOT FREE TO CHANGE. It must stay identical, in order, to FEATURE_COLUMNS in
+# ai-service/app/services/preprocessing.py — that module builds the matrix sent to this model
+# at inference time, and nothing at runtime checks the two agree. A mismatch does not raise;
+# it silently feeds the model the wrong column in each slot.
+#
+# The rule that keeps them aligned: only train on features the service can actually produce
+# from one /analyze request. An earlier version trained on `arrival_rate` and `reroute`, which
+# are run-level knobs the serving path never sends per node — so the model could never have
+# been deployed against real traffic at all.
+FEATURE_COLUMNS = [
+    "density",                  # occupancy / capacity, now
+    "trend",                    # RISING=+1, FLAT=0, FALLING=-1
+    "capacity_norm",            # capacity / largest capacity in the venue
+    "degree_norm",              # neighbours / most-connected node's neighbours
+    "neighbour_max_density",    # busiest neighbour — the propagation signal
+    "density_delta",            # change across the history window the service sends
+]
 IN_CHANNELS = len(FEATURE_COLUMNS)
 
 
