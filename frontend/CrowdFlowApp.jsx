@@ -387,6 +387,21 @@ function VenueMap({
   const drag = useRef(null);
   const wrapRef = useRef(null);
 
+  // Width/height of the panel, so the viewBox below can match its shape. Tracked rather than
+  // read once: the panel reflows with the sidebar at narrow widths, and a stale aspect would
+  // stretch the venue until something else forced a re-render.
+  const [aspect, setAspect] = useState(1);
+  useEffect(() => {
+    const element = wrapRef.current;
+    if (!element || typeof ResizeObserver === "undefined") return undefined;
+    const observer = new ResizeObserver(([entry]) => {
+      const { width, height } = entry.contentRect;
+      if (width > 0 && height > 0) setAspect(width / height);
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
   const clampZoom = (z) => Math.max(0.7, Math.min(3.2, z));
 
   const onPointerDown = (e) => {
@@ -396,7 +411,10 @@ function VenueMap({
   const onPointerMove = (e) => {
     if (!drag.current) return;
     const rect = wrapRef.current?.getBoundingClientRect();
-    const scale = rect ? 100 / rect.width : 0.2;
+    // User-space units per pixel. Both axes share one figure because the viewBox is kept at
+    // the container's aspect. Dividing by zoom is what makes the map track the cursor exactly
+    // rather than sliding faster the further you have zoomed in.
+    const scale = rect && rect.height > 0 ? frame.h / zoom / rect.height : 0.2;
     setPan({
       x: drag.current.px + (e.clientX - drag.current.sx) * scale,
       y: drag.current.py + (e.clientY - drag.current.sy) * scale,
@@ -405,9 +423,42 @@ function VenueMap({
   const onPointerUp = (e) => { drag.current = null; e.currentTarget.releasePointerCapture?.(e.pointerId); };
   const recenter = () => { setPan({ x: 0, y: 0 }); setZoom(1); };
 
-  const vb = 100 / zoom;
-  const cx = 50 - pan.x, cy = 50 - pan.y;
-  const viewBox = `${cx - vb / 2} ${cy - vb / 2} ${vb} ${vb}`;
+  /**
+   * The default view: the venue's own bounding box, grown to the panel's shape.
+   *
+   * The adapter projects a venue into a square 0-100 space preserving its real proportions, so
+   * a wide arena occupies a wide, short band of that square and leaves the rest empty. Framing
+   * the whole square therefore spent most of the panel on nothing — a 620x270 layout rendered
+   * into roughly a seventh of the available pixels. Framing the venue instead fills the panel
+   * whatever shape the venue is.
+   *
+   * Growing the *shorter* side to reach the panel's aspect is what keeps this from distorting:
+   * the frame only ever gets bigger than the venue, never squashed to fit.
+   */
+  const frame = useMemo(() => {
+    const points = venue.outline?.length ? venue.outline : [[0, 0], [100, 100]];
+    const xs = points.map((p) => p[0]);
+    const ys = points.map((p) => p[1]);
+    const minX = Math.min(...xs), maxX = Math.max(...xs);
+    const minY = Math.min(...ys), maxY = Math.max(...ys);
+
+    const padding = 4; // breathing room so labels on edge nodes are not clipped
+    const width = Math.max(maxX - minX + padding * 2, 1);
+    const height = Math.max(maxY - minY + padding * 2, 1);
+
+    const boxWidth = Math.max(width, height * aspect);
+    return {
+      cx: (minX + maxX) / 2,
+      cy: (minY + maxY) / 2,
+      w: boxWidth,
+      h: boxWidth / aspect,
+    };
+  }, [venue.outline, aspect]);
+
+  const vbW = frame.w / zoom;
+  const vbH = frame.h / zoom;
+  const cx = frame.cx - pan.x, cy = frame.cy - pan.y;
+  const viewBox = `${cx - vbW / 2} ${cy - vbH / 2} ${vbW} ${vbH}`;
   const outlinePath = venue.outline.map((p) => p.join(",")).join(" ");
 
   return (
@@ -429,9 +480,10 @@ function VenueMap({
           </radialGradient>
         </defs>
 
-        {/* base */}
-        <rect x="-50" y="-50" width="200" height="200" fill="#070B12" />
-        <rect x="-50" y="-50" width="200" height="200" fill="url(#cf-map-grid)" />
+        {/* Base. Sized well past the 0-100 projection space so the ground still covers the
+            frame when a wide venue or a zoomed-out view widens the viewBox past it. */}
+        <rect x="-400" y="-400" width="900" height="900" fill="#070B12" />
+        <rect x="-400" y="-400" width="900" height="900" fill="url(#cf-map-grid)" />
 
         {/* venue landmass */}
         <polygon points={outlinePath} fill="#0D1524" stroke="var(--cf-line2)" strokeWidth="0.5" />
@@ -465,12 +517,17 @@ function VenueMap({
                 fillOpacity={showDensity ? 0.16 + h.density * 0.3 : 1}
                 stroke={isSel ? "var(--cf-orange)" : style.stroke}
                 strokeWidth={isSel ? 0.8 : 0.4} />
-              <text x={hx} y={hy} textAnchor="middle" fill="rgba(238,242,248,0.72)"
+              {/* Outlined text. A busy zone is exactly where the label matters most and also
+                  exactly where hundreds of agent dots are drawn, so without a knockout the
+                  name of the zone you are trying to read disappears into the crowd. */}
+              <text x={hx} y={hy} textAnchor="middle" fill="rgba(238,242,248,0.92)"
+                stroke="#070B12" strokeWidth={0.7} paintOrder="stroke"
                 style={{ fontSize: 2.1, fontFamily: "Rajdhani, sans-serif", fontWeight: 600, letterSpacing: "0.08em", pointerEvents: "none" }}>
                 {h.name.toUpperCase()}
               </text>
               {showDensity && (
                 <text x={hx} y={hy + 3} textAnchor="middle" fill={densityColor(h.density)}
+                  stroke="#070B12" strokeWidth={0.7} paintOrder="stroke"
                   style={{ fontSize: 1.9, fontFamily: "JetBrains Mono, monospace", pointerEvents: "none" }}>
                   {Math.round(h.density * 100)}%
                 </text>
