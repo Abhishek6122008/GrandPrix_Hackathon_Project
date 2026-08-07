@@ -90,26 +90,64 @@ degraded, not broken. The full contract is in [`docs/api-contract.md`](docs/api-
 
 ## Which model answers
 
-The AI service has two inference paths and reports which one it used, in `modelInfo` on every
-response and at `GET /health`.
+Three paths, tried best-first. Whichever answered is named in `modelInfo` on every response and
+at `GET /health`, so nobody has to guess which one they are looking at.
 
 | Path | When it runs | Reports as |
 |---|---|---|
-| **Hugging Face Inference API** | `HF_API_TOKEN` and the matching `HF_*_URL` are set | `huggingface` |
-| **Offline model** (`ai-service/app/scoring.py`) | otherwise, or when a hosted call fails | `local-linear` / `local-template` |
+| **Hugging Face Inference API** | `HF_API_TOKEN` + the matching `HF_*_URL` are set | `huggingface` |
+| **In-process GNN** | a checkpoint is available and torch is installed | `congestion-gnn (…)` |
+| **Offline linear model** | otherwise, or when the above fail | `local-linear` / `local-template` |
 
-The choice is made **per step**, so a working GNN endpoint with a missing LLM one gives you
-hosted risk scores with locally written prose.
+The choice is made **per step**, so a working GNN endpoint with a missing LLM one gives hosted
+risk scores with locally written prose.
 
-The offline model is deliberately not a neural network, and does not claim to be. It is a
-one-hop linear propagation model over the same feature columns the GNN trains on — a zone's own
-density, its busiest neighbour's, the trend and the change over the history window. The
-neighbour term is the part a per-zone threshold cannot do: it is what lets the system say
-"Gate B is about to be pushed over by the concourse next to it."
+**The in-process path is the one the architecture prefers.** The checkpoint is pulled from the
+Hugging Face Hub once at startup and every inference after that is local — Hugging Face is the
+model registry, not something the service phones during a request. That removes the two things
+most likely to break on stage: a cold inference endpoint and the venue wifi. Set
+`CROWDFLOW_GNN_REPO` and install torch to enable it; see `ai-service/.env.example`.
 
-To use Hugging Face instead, copy `ai-service/.env.example` to `ai-service/.env` and fill it
-in. To make hosted inference mandatory so a bad token fails loudly rather than silently falling
+**The offline model is deliberately not a neural network and does not claim to be.** It is a
+one-hop linear propagation model over the same feature columns the GNN trains on. The neighbour
+term is the part a per-zone threshold cannot do — it is what lets the system say "Gate B is
+about to be pushed over by the concourse next to it." It exists so a clean checkout runs with
+no setup at all.
+
+To make hosted inference mandatory, so a bad token fails loudly instead of silently falling
 back, set `CROWDFLOW_LOCAL_FALLBACK=false`.
+
+### The feature contract
+
+Three files must agree on the GNN's input columns, in order:
+
+- `ai-service/app/services/preprocessing.py` — builds the matrix at inference time. Source of truth.
+- `ml/gnn/model.py` — sizes the network's input layer.
+- `ml/data/generate_synthetic_runs.py` — emits the training columns.
+
+Nothing at runtime checks this, and a mismatch does not raise — it silently feeds the model the
+wrong number in every slot. `ai-service/tests/test_feature_contract.py` fails the build instead.
+
+## Training the GNN
+
+Optional — the app runs without it. Needs the heavier `ml/requirements.txt`.
+
+```bash
+cd ml
+python -m venv .venv
+.venv/Scripts/python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+.venv/Scripts/python -m pip install -r requirements.txt
+
+.venv/Scripts/python data/generate_synthetic_runs.py --runs 300
+.venv/Scripts/python gnn/train_gnn.py --data out --epochs 40
+.venv/Scripts/python gnn/export_to_hf.py --repo <your-username>/congestion-gnn
+```
+
+Training reports **recall and precision against the same 0.85 critical line the backend alerts
+on**, next to a persistence baseline ("assume every zone stays as it is"). MSE is dominated by
+the many quiet zones near zero and says nothing about the only case anyone cares about — did we
+see the crush coming. If the model cannot beat persistence, the run says so and the checkpoint
+should not be shipped.
 
 ---
 
