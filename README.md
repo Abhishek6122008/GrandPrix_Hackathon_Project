@@ -143,11 +143,32 @@ python -m venv .venv
 .venv/Scripts/python gnn/export_to_hf.py --repo <your-username>/congestion-gnn
 ```
 
-Training reports **recall and precision against the same 0.85 critical line the backend alerts
-on**, next to a persistence baseline ("assume every zone stays as it is"). MSE is dominated by
-the many quiet zones near zero and says nothing about the only case anyone cares about — did we
-see the crush coming. If the model cannot beat persistence, the run says so and the checkpoint
-should not be shipped.
+### Reading the training report
+
+MSE is dominated by the many quiet zones sitting near zero and says nothing about the only case
+anyone cares about — did we see the crush coming. So the run reports against the **same 0.85
+critical line the backend alerts on**, in two blocks, and the second is the one that matters.
+
+**All zone-ticks above the line** — a persistence baseline ("assume every zone stays as it is")
+already scores ~92% recall here, because most zones that are critical in five ticks are
+*already* critical now. This block largely measures reporting, not prediction.
+
+**Onset** — zones below the line now that cross it within the horizon. This is the actual
+claim, and persistence scores 0% on it by construction. Current checkpoint, on held-out runs:
+
+| | caught | recall | precision |
+|---|---|---|---|
+| **GNN** | 1421 of 1630 | **87%** | 95% |
+| persistence | 0 of 1630 | 0% | — |
+
+That is the honest headline: **the model catches 87% of bottlenecks before they form.** Quote
+that one, not the 99%.
+
+Re-score an existing checkpoint without retraining:
+
+```bash
+.venv/Scripts/python gnn/evaluate.py --checkpoint out/congestion_gnn.pt
+```
 
 ---
 

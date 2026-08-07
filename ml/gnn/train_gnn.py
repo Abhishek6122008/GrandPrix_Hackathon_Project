@@ -64,19 +64,32 @@ def report(model: CongestionGNN, val_set: list[Data]) -> None:
     model.eval()
     stats = {"tp": 0, "fp": 0, "fn": 0}
     base = {"tp": 0, "fp": 0, "fn": 0}
+    onset = {"tp": 0, "fp": 0, "fn": 0}
+    onset_base = {"tp": 0, "fp": 0, "fn": 0}
 
     with torch.no_grad():
         for snapshot in val_set:
             predicted = model(snapshot.x, snapshot.edge_index)
             # Column 0 is `density` — see FEATURE_COLUMNS. Persistence predicts it unchanged.
             persistence = snapshot.x[:, 0]
+            actual = snapshot.y >= CRITICAL
+            # The zones worth predicting: fine right now, in trouble HORIZON ticks later.
+            # Persistence cannot score here at all — it is guessing the current value, which is
+            # by construction below the line.
+            new_trouble = actual & (persistence < CRITICAL)
 
-            for scores, into in ((predicted, stats), (persistence, base)):
+            for scores, all_counts, onset_counts in (
+                (predicted, stats, onset), (persistence, base, onset_base)
+            ):
                 flagged = scores >= CRITICAL
-                actual = snapshot.y >= CRITICAL
-                into["tp"] += int((flagged & actual).sum())
-                into["fp"] += int((flagged & ~actual).sum())
-                into["fn"] += int((~flagged & actual).sum())
+                all_counts["tp"] += int((flagged & actual).sum())
+                all_counts["fp"] += int((flagged & ~actual).sum())
+                all_counts["fn"] += int((~flagged & actual).sum())
+
+                onset_counts["tp"] += int((flagged & new_trouble).sum())
+                onset_counts["fn"] += int((~flagged & new_trouble).sum())
+                # A false positive among quiet zones that stayed quiet.
+                onset_counts["fp"] += int((flagged & ~actual & (persistence < CRITICAL)).sum())
 
     def rates(counts: dict[str, int]) -> tuple[float, float]:
         caught = counts["tp"] + counts["fn"]
@@ -88,15 +101,33 @@ def report(model: CongestionGNN, val_set: list[Data]) -> None:
     base_recall, base_precision = rates(base)
     events = stats["tp"] + stats["fn"]
 
-    print(f"\n--- held-out runs: {events} zone-ticks actually crossed {CRITICAL:.0%} ---")
-    print(f"  GNN         caught {stats['tp']:5d} of {events:5d} "
-          f"({recall:.0%} recall, {precision:.0%} precision)")
-    print(f"  persistence caught {base['tp']:5d} of {events:5d} "
-          f"({base_recall:.0%} recall, {base_precision:.0%} precision)")
+    onset_recall, onset_precision = rates(onset)
+    onset_base_recall, _ = rates(onset_base)
+    onsets = onset["tp"] + onset["fn"]
+
+    print(f"\n--- held-out runs ---")
+    print(f"\nAll zone-ticks above {CRITICAL:.0%} ({events} of them):")
+    print(f"  GNN         caught {stats['tp']:6d} ({recall:.0%} recall, {precision:.0%} precision)")
+    print(f"  persistence caught {base['tp']:6d} ({base_recall:.0%} recall, {base_precision:.0%} precision)")
+    print("  NB: persistence scores well here because most zones that are critical in HORIZON")
+    print("      ticks are already critical now. This number mostly measures reporting, not")
+    print("      prediction — the block below is the one that measures prediction.")
+
+    print(f"\nONSET — zones below {CRITICAL:.0%} now that cross it within the horizon "
+          f"({onsets} of them):")
+    print(f"  GNN         caught {onset['tp']:6d} ({onset_recall:.0%} recall, "
+          f"{onset_precision:.0%} precision)")
+    print(f"  persistence caught {onset_base['tp']:6d} ({onset_base_recall:.0%} recall) "
+          f"— cannot exceed 0 by construction")
+
     if events == 0:
-        print("  !! nothing went critical in the held-out runs — raise --runs or the arrival rate")
-    elif recall <= base_recall and precision <= base_precision:
-        print("  !! the model does not beat 'assume nothing changes'. Do not ship this checkpoint.")
+        print("\n  !! nothing went critical in the held-out runs — raise --runs or the arrival rate")
+    elif onsets == 0:
+        print("\n  !! no onset cases at all: every critical zone was already critical. The runs "
+              "are saturated — lower the arrival rate so congestion builds gradually.")
+    elif onset_recall < 0.2:
+        print("\n  !! the model catches almost no bottleneck before it forms, which is the whole "
+              "claim. Do not ship this checkpoint on the strength of the number above it.")
 
 
 def train(data_dir: Path, epochs: int, lr: float, out: Path) -> None:

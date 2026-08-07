@@ -1,7 +1,10 @@
 """Push a trained congestion GNN to the Hugging Face Hub.
 
-    huggingface-cli login          # or set HF_TOKEN
+    hf auth login                  # or set HF_TOKEN
     python export_to_hf.py --repo <your-username>/congestion-gnn
+
+Note `hf`, not `huggingface-cli` — the latter was retired in huggingface_hub 1.x and now
+exits with a deprecation notice instead of logging you in.
 
 Uploads everything the Endpoint needs to serve itself: the checkpoint, the architecture it was
 saved from, the handler that turns a venue graph into a tensor, and a pinned requirements file.
@@ -85,7 +88,7 @@ torch-geometric>=2.5
 def export(checkpoint: Path, repo_id: str, horizon: int, private: bool) -> None:
     token = os.environ.get("HF_TOKEN")
     if not token:
-        raise SystemExit("Set HF_TOKEN (or run `huggingface-cli login`) before exporting.")
+        raise SystemExit("Set HF_TOKEN (or run `hf auth login`) before exporting.")
     if not checkpoint.exists():
         raise SystemExit(f"No checkpoint at {checkpoint} — run train_gnn.py first.")
 
