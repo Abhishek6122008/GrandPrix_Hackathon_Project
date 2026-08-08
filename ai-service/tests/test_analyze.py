@@ -121,6 +121,27 @@ def client():
     return TestClient(app)
 
 
+@pytest.fixture
+def without_in_process_models():
+    """
+    Forces TinyBERT and the trained GNN off for one test, leaving only the linear fallback.
+
+    Needed because these tests must assert the *same* thing on every machine, and whether
+    either model answers depends on what a gitignored `.env` happens to say and whether torch
+    happens to be installed. Without this, enabling a model silently changes what the suite is
+    testing rather than failing loudly.
+    """
+    from app.gnn_local import local_gnn
+    from app.tinybert_local import tinybert_risk
+
+    was_ready = (tinybert_risk.ready, local_gnn.ready)
+    tinybert_risk.ready = local_gnn.ready = False
+    try:
+        yield
+    finally:
+        tinybert_risk.ready, local_gnn.ready = was_ready
+
+
 # --------------------------------------------------------------------- the checks
 
 def test_returns_predictions_and_advisory_when_both_models_answer(client):
@@ -148,7 +169,7 @@ def test_returns_predictions_and_advisory_when_both_models_answer(client):
     assert body["advisory"]["actions"] == ["Divert to Walkway"]
 
 
-def test_answers_from_the_local_model_when_hugging_face_is_not_configured(client):
+def test_answers_from_the_local_model_when_hugging_face_is_not_configured(client, without_in_process_models):
     """
     The default path, and the one the demo actually runs on: no token, no network, still a
     full answer. This is what makes the whole stack work on conference wifi.
@@ -171,7 +192,7 @@ def test_answers_from_the_local_model_when_hugging_face_is_not_configured(client
     assert body["modelInfo"]["llm"] == "local-template"
 
 
-def test_degrades_to_failed_with_a_full_body_when_hosted_inference_is_mandatory(client):
+def test_degrades_to_failed_with_a_full_body_when_hosted_inference_is_mandatory(client, without_in_process_models):
     """
     The contract Spring depends on: a clear error, not a hang and not a 500.
 
@@ -191,7 +212,7 @@ def test_degrades_to_failed_with_a_full_body_when_hosted_inference_is_mandatory(
     assert {e["stage"] for e in body["errors"]} == {"gnn", "llm"}
 
 
-def test_partial_when_only_the_gnn_is_down_and_there_is_no_fallback(client):
+def test_partial_when_only_the_gnn_is_down_and_there_is_no_fallback(client, without_in_process_models):
     """Advisory survives a dead GNN — it falls back to measured density for the prompt."""
     with stub_server(), hf_env(
         HF_API_TOKEN="test-token",
@@ -211,7 +232,7 @@ def test_partial_when_only_the_gnn_is_down_and_there_is_no_fallback(client):
     assert [e["stage"] for e in body["errors"]] == ["gnn"]
 
 
-def test_a_dead_hosted_gnn_falls_through_to_the_local_model(client):
+def test_a_dead_hosted_gnn_falls_through_to_the_local_model(client, without_in_process_models):
     """Hosted risk fails, local risk answers, hosted prose still works — the mixed path."""
     with stub_server(), hf_env(
         HF_API_TOKEN="test-token",
@@ -229,6 +250,42 @@ def test_a_dead_hosted_gnn_falls_through_to_the_local_model(client):
     assert body["modelInfo"]["gnn"] == "local-linear"
     # The advisory still came from the stub, so both halves are independently sourced.
     assert body["advisory"]["actions"] == ["Divert to Walkway"]
+
+
+def test_tinybert_answers_and_takes_priority_when_it_is_enabled(client):
+    """
+    The beta path: CROWDFLOW_TINYBERT=true makes TinyBERT the model behind /analyze, ahead of
+    the trained GNN and the linear fallback.
+
+    Skipped when it is not enabled — the suite must be green on a checkout that has never set
+    the flag or installed transformers, which is the default.
+
+    Loads the model itself rather than relying on the app's startup hook: `TestClient(app)`
+    outside a `with` block never runs the lifespan, so without this the check would skip even
+    with the flag on — passing green while testing nothing.
+    """
+    from app.tinybert_local import tinybert_risk
+
+    if not tinybert_risk.ready:
+        tinybert_risk.load()
+    if not tinybert_risk.ready:
+        pytest.skip(f"TinyBERT not loaded ({tinybert_risk.error})")
+
+    with hf_env(HF_API_TOKEN="", HF_GNN_URL="", HF_LLM_URL=""):
+        response = client.post("/analyze", json=VENUE_REQUEST)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok", body["errors"]
+    assert body["modelInfo"]["gnn"].startswith("tinybert"), body["modelInfo"]
+
+    risk = {p["nodeId"]: p["risk"] for p in body["predictions"]}
+    assert set(risk) == {"gate-a", "walk", "exit-e"}
+    assert all(0.0 <= v <= 1.0 for v in risk.values())
+
+    # The embedding term is only 30% of the score, so the feature half still has to carry the
+    # ordering: the gate at 93% must outrank the exit at 5%.
+    assert risk["gate-a"] > risk["exit-e"], risk
 
 
 def test_risk_and_advisory_endpoints_answer_without_any_model_configured(client):

@@ -30,7 +30,9 @@ load_dotenv()
 
 from app import scoring  # noqa: E402  (must follow load_dotenv)
 from app.config import settings  # noqa: E402
+from app.gnn_local import local_gnn  # noqa: E402
 from app.routers import advisory, analyze, risk  # noqa: E402
+from app.tinybert_local import tinybert_risk  # noqa: E402
 
 logging.basicConfig(
     level=settings.LOG_LEVEL,
@@ -49,12 +51,14 @@ async def lifespan(app: FastAPI):
     raises: a missing checkpoint or an absent torch install is an expected state, reported at
     /health, not a reason the service will not start.
     """
+    tinybert_risk.load()
     local_gnn.load()
 
     config = settings.describe()
     log.info(
-        "AI service ready — GNN: %s | advisory: %s | local fallback: %s",
+        "AI service ready — risk: %s | advisory: %s | local fallback: %s",
         "hugging face" if config["hostedGnn"]
+        else f"tinybert ({tinybert_risk.model_id})" if tinybert_risk.ready
         else f"in-process ({local_gnn.source})" if local_gnn.ready
         else scoring.MODEL_NAME,
         "hugging face" if config["hostedLlm"] else scoring.ADVISORY_MODEL_NAME,
@@ -95,16 +99,19 @@ def health() -> dict:
     so every /analyze will 502.
     """
     config = settings.describe()
-    usable = config["localFallback"] or local_gnn.ready or (config["hostedGnn"] and config["hostedLlm"])
+    usable = (config["localFallback"] or local_gnn.ready or tinybert_risk.ready
+              or (config["hostedGnn"] and config["hostedLlm"]))
     return {
         "status": "ok" if usable else "degraded",
         "service": "crowdflow-ai",
         "inference": {
             "gnn": "huggingface" if config["hostedGnn"]
+                   else "tinybert" if tinybert_risk.ready
                    else "congestion-gnn" if local_gnn.ready
                    else scoring.MODEL_NAME,
             "advisory": "huggingface" if config["hostedLlm"] else scoring.ADVISORY_MODEL_NAME,
         },
+        "tinybert": tinybert_risk.describe(),
         "localGnn": local_gnn.describe(),
         "config": config,
     }

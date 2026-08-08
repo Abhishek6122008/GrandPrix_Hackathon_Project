@@ -33,6 +33,7 @@ from app.config import settings
 from app.gnn_local import local_gnn
 from app.schemas.analyze_schema import Advisory, AnalyzeRequest, AnalyzeResponse
 from app.services import postprocessing, preprocessing
+from app.tinybert_local import tinybert_risk
 
 log = logging.getLogger(__name__)
 
@@ -60,10 +61,11 @@ async def analyze(request: AnalyzeRequest):
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     # --- Step 3: predicted congestion, a few ticks ahead. -------------------
-    # Three sources, best first. Each is a real deployment mode rather than defensive
-    # layering: hosted inference is the architecture diagram's path, the in-process GNN is
-    # what the project plan calls for (Hugging Face as the model registry, not a per-request
-    # dependency), and the linear model is what makes a clean checkout work with no setup.
+    # Four sources, best first. Each is a real deployment mode rather than defensive layering:
+    # hosted inference is the architecture diagram's path, TinyBERT is the beta model ported
+    # from the old Python backend, the in-process GNN is what the project plan calls for
+    # (Hugging Face as the model registry, not a per-request dependency), and the linear model
+    # is what makes a clean checkout work with no setup.
     gnn_result = HfResult(error="hugging face GNN not configured")
 
     if settings.hf_gnn_configured:
@@ -72,6 +74,19 @@ async def analyze(request: AnalyzeRequest):
         )
         if not gnn_result.ok:
             log.warning("hosted GNN failed, falling back: %s", gnn_result.error)
+
+    # TinyBERT sits ahead of the trained GNN because it is off unless CROWDFLOW_TINYBERT is
+    # explicitly set: someone who turned it on wants it answering, not shadowed by a checkpoint
+    # that happens to be on disk. Left unset — the default — this branch never runs.
+    if not gnn_result.ok and tinybert_risk.ready:
+        try:
+            gnn_result = HfResult(
+                value=tinybert_risk.predict(features.node_ids, features.features),
+                model=f"tinybert ({tinybert_risk.model_id})",
+            )
+        except Exception as exc:  # noqa: BLE001 — a bad tensor must not 500 the endpoint
+            log.warning("TinyBERT inference failed: %s", exc)
+            gnn_result = HfResult(error=f"tinybert: {exc}")
 
     if not gnn_result.ok and local_gnn.ready:
         try:
