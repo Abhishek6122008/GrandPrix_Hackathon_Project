@@ -155,11 +155,28 @@ public class StateBroadcaster {
     private List<SessionState.PersonState> samplePeople(Session session) {
         List<Person> people = session.getPeople();
         int total = people.size();
-        int stride = total <= maxPeopleInFrame ? 1 : (int) Math.ceil((double) total / maxPeopleInFrame);
+
+        // Which agents are in the sample is decided by a hash of each agent's own id, never by
+        // its position in the list.
+        //
+        // Taking every nth index looked equivalent and was not. `people` is an ArrayList that
+        // agents are *removed* from as they leave, so a single exit shifts every later index
+        // and the next frame carries a different set of ids. Two things broke because of it:
+        // figures on the map jumped to unrelated positions, worst during egress when exits are
+        // frequent; and the browser, seeing an entirely new set of keys every frame, destroyed
+        // and rebuilt the whole crowd layer instead of moving the nodes it already had.
+        //
+        // Hashing the id fixes both. An agent's membership depends on nothing but itself, so a
+        // sampled agent stays sampled for its whole visit and the client can animate it.
+        long cutoff = total <= maxPeopleInFrame
+                ? 0xFFFFFFFFL
+                : (long) ((double) maxPeopleInFrame / total * 0xFFFFFFFFL);
 
         List<SessionState.PersonState> sampled = new ArrayList<>(Math.min(total, maxPeopleInFrame));
-        for (int i = 0; i < total; i += stride) {
-            Person person = people.get(i);
+        for (Person person : people) {
+            if (spread(person.getId()) > cutoff) {
+                continue;
+            }
             sampled.add(new SessionState.PersonState(
                     person.getId(),
                     Math.round(person.getX() * 10) / 10.0,
@@ -169,6 +186,24 @@ public class StateBroadcaster {
                     person.getRerouteCount() > 0));
         }
         return sampled;
+    }
+
+    /**
+     * Agent id to an evenly spread 32-bit value.
+     *
+     * {@code String.hashCode} is not usable here: ids are sequential ("p-1", "p-2", …) and its
+     * output for those is nearly sequential too, so a threshold on it would select one
+     * contiguous block of arrivals and leave the rest of the venue empty. The extra mixing is
+     * what makes the sample look like the crowd.
+     */
+    private static long spread(String id) {
+        int hash = id.hashCode();
+        hash ^= (hash >>> 16);
+        hash *= 0x7feb352d;
+        hash ^= (hash >>> 15);
+        hash *= 0x846ca68b;
+        hash ^= (hash >>> 16);
+        return hash & 0xFFFFFFFFL;
     }
 
     private <T> List<T> lastOf(List<T> items, int count) {
