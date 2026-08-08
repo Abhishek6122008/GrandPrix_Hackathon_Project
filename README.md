@@ -1,5 +1,7 @@
 # Crowd Flow Optimiser
 
+![Crowd Flow Optimiser — venue maps with live crowd density heatmaps and a before/after comparison](docs/img/crowd-flow-optimizer-board.png)
+
 **Geek Room AI Race Month · Grandprix — Problem Statement #3**
 
 Simulate a venue, predict where the crowd will jam, and route around it — before the queue
@@ -96,17 +98,66 @@ at `GET /health`, so nobody has to guess which one they are looking at.
 | Path | When it runs | Reports as |
 |---|---|---|
 | **Hugging Face Inference API** | `HF_API_TOKEN` + the matching `HF_*_URL` are set | `huggingface` |
-| **In-process GNN** | a checkpoint is available and torch is installed | `congestion-gnn (…)` |
-| **Offline linear model** | otherwise, or when the above fail | `local-linear` / `local-template` |
+| **In-process models** | the model is available and its library is installed | `congestion-gnn` / `Qwen/Qwen2.5-0.5B-Instruct` |
+| **Offline fallback** | otherwise, or when the above fail | `local-linear` / `local-template` |
 
-The choice is made **per step**, so a working GNN endpoint with a missing LLM one gives hosted
-risk scores with locally written prose.
+The choice is made **per step**, so a working GNN with a missing advisory model gives real risk
+scores with templated prose.
 
-**The in-process path is the one the architecture prefers.** The checkpoint is pulled from the
+### Two models, two different decisions
+
+The project uses Hugging Face twice, and deliberately in opposite directions:
+
+- **Risk prediction — trained, not found.** Nothing on the Hub predicts congestion from a venue
+  graph. Searching it returns molecule and citation-network GNNs, and image-based crowd
+  *counting* models that read camera frames. None share an input space with a venue graph, so
+  none can be fine-tuned into one. So we trained
+  [`abhi1005/congestion-gnn`](https://huggingface.co/abhi1005/congestion-gnn) and published it.
+- **Advisory text — found, not trained.** Turning four facts into one clear sentence is exactly
+  what small instruct models already do, so `Qwen/Qwen2.5-0.5B-Instruct` is adopted as-is. No
+  training, ~1 GB, runs on CPU.
+
+### The advisory model is guarded, and needs to be
+
+`Qwen2.5-0.5B-Instruct` is fluent but small, and within minutes of being wired up it produced
+three safety-relevant errors on real prompts:
+
+| prompt | what it wrote | the problem |
+|---|---|---|
+| Gate A critical | "Reroute from Gate A **to Gate B**" | Gate B was never mentioned — invented |
+| no zone above threshold | "Reroute from the high-risk area…" | there was no high-risk area |
+| two congested zones | "N. Concourse → **Food Court**" | Food Court was the *other* congested zone |
+
+So `app/advisory_local.py` rejects any sentence naming a zone that was not in the prompt, and
+`/analyze` does not call the model at all when nothing is above the warning line. A rejected
+advisory falls back to the templates. **Fluent and wrong is worse than plain and right** when a
+marshal is about to act on it.
+
+**The in-process path is the one the architecture prefers.** Both models are pulled from the
 Hugging Face Hub once at startup and every inference after that is local — Hugging Face is the
 model registry, not something the service phones during a request. That removes the two things
-most likely to break on stage: a cold inference endpoint and the venue wifi. Set
-`CROWDFLOW_GNN_REPO` and install torch to enable it; see `ai-service/.env.example`.
+most likely to break on stage: a cold inference endpoint and the venue wifi.
+
+Enabling them is optional, because neither library is in `requirements.txt` — a clean checkout
+must run with no setup at all:
+
+```bash
+cd ai-service
+# risk prediction
+.venv/Scripts/python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+.venv/Scripts/python -m pip install torch-geometric
+# advisory text
+.venv/Scripts/python -m pip install transformers
+```
+
+then in `ai-service/.env`:
+
+```
+CROWDFLOW_GNN_REPO=abhi1005/congestion-gnn
+CROWDFLOW_ADVISORY_MODEL=Qwen/Qwen2.5-0.5B-Instruct
+```
+
+`GET /health` reports which of the two actually loaded, and why if either did not.
 
 **The offline model is deliberately not a neural network and does not claim to be.** It is a
 one-hop linear propagation model over the same feature columns the GNN trains on. The neighbour

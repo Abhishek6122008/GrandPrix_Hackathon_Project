@@ -86,11 +86,30 @@ torch-geometric>=2.5
 
 
 def export(checkpoint: Path, repo_id: str, horizon: int, private: bool) -> None:
-    token = os.environ.get("HF_TOKEN")
-    if not token:
-        raise SystemExit("Set HF_TOKEN (or run `hf auth login`) before exporting.")
+    # Passing token=None makes huggingface_hub fall back to the credential `hf auth login`
+    # stores on disk. Reading only HF_TOKEN — as this did — rejects a perfectly good login
+    # and tells the user to do the thing they have already done.
+    api = HfApi(token=os.environ.get("HF_TOKEN") or None)
+    try:
+        account = api.whoami()["name"]
+    except Exception as exc:  # noqa: BLE001 — any auth failure gets the same instruction
+        raise SystemExit(
+            "Not signed in to Hugging Face.\n"
+            "  Run:  hf auth login          (paste a WRITE token from "
+            "https://huggingface.co/settings/tokens)\n"
+            "  or:   set HF_TOKEN=hf_...\n"
+            f"  ({type(exc).__name__}: {exc})"
+        ) from exc
+
     if not checkpoint.exists():
         raise SystemExit(f"No checkpoint at {checkpoint} — run train_gnn.py first.")
+
+    # Catch the commonest slip before creating anything: the repo must be under an account
+    # you can actually write to, and `--repo congestion-gnn` with no owner is not that.
+    owner = repo_id.split("/")[0] if "/" in repo_id else None
+    if owner is None:
+        raise SystemExit(f"--repo needs an owner, e.g. {account}/congestion-gnn")
+    print(f"signed in as {account}, pushing to {repo_id}")
 
     here = Path(__file__).resolve().parent
     handler, architecture = here / "handler.py", here / "model.py"
@@ -98,7 +117,6 @@ def export(checkpoint: Path, repo_id: str, horizon: int, private: bool) -> None:
         if not required.exists():
             raise SystemExit(f"{required.name} is missing — the Endpoint cannot serve without it.")
 
-    api = HfApi(token=token)
     api.create_repo(repo_id=repo_id, exist_ok=True, private=private)
 
     staging = checkpoint.parent

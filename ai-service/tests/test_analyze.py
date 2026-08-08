@@ -116,9 +116,76 @@ def hf_env(**overrides: str):
 
 @pytest.fixture
 def client():
+    """
+    Used as a context manager so FastAPI's lifespan actually runs.
+
+    `TestClient(app)` on its own does not fire startup, so the in-process GNN never loads and
+    every test silently exercises the fallback path instead — passing while proving nothing
+    about the model that ships.
+    """
     from app.main import app
 
-    return TestClient(app)
+    with TestClient(app) as test_client:
+        yield test_client
+
+
+@pytest.fixture(autouse=True)
+def without_local_advisory():
+    """
+    Forces the in-process advisory model off for every test in this file.
+
+    Autouse and unconditional: generating with a 0.5B model takes seconds per call and would
+    make the suite slow and non-deterministic, and none of these tests are about the wording of
+    the prose. `test_the_local_advisory_model_writes_a_sentence` opts back in explicitly.
+    """
+    from app.advisory_local import local_advisory
+
+    was_ready = local_advisory.ready
+    local_advisory.ready = False
+    try:
+        yield
+    finally:
+        local_advisory.ready = was_ready
+
+
+@pytest.fixture
+def without_tinybert():
+    """
+    Forces the TinyBERT risk model off for one test.
+
+    It sits ahead of the trained GNN in the chain, so any test asserting that something *else*
+    answered has to close this door first — including the GNN's own test.
+    """
+    from app.tinybert_local import tinybert_risk
+
+    was_ready = tinybert_risk.ready
+    tinybert_risk.ready = False
+    try:
+        yield
+    finally:
+        tinybert_risk.ready = was_ready
+
+
+@pytest.fixture
+def without_local_gnn(without_tinybert):
+    """
+    Forces every in-process risk model off for one test, leaving only the linear fallback.
+
+    Needed because these tests must assert the *same* thing on every machine, and whether the
+    GNN answers depends on whether torch happens to be installed and a checkpoint happens to be
+    reachable. Without this, installing torch silently changes what the suite is testing —
+    which is exactly what happened the first time. TinyBERT is off via the fixture this one
+    depends on, for the same reason: a model that loads because a `.env` says so must not
+    change what a test means.
+    """
+    from app.gnn_local import local_gnn
+
+    was_ready = local_gnn.ready
+    local_gnn.ready = False
+    try:
+        yield
+    finally:
+        local_gnn.ready = was_ready
 
 
 # --------------------------------------------------------------------- the checks
@@ -148,7 +215,7 @@ def test_returns_predictions_and_advisory_when_both_models_answer(client):
     assert body["advisory"]["actions"] == ["Divert to Walkway"]
 
 
-def test_answers_from_the_local_model_when_hugging_face_is_not_configured(client):
+def test_answers_from_the_local_model_when_hugging_face_is_not_configured(client, without_local_gnn):
     """
     The default path, and the one the demo actually runs on: no token, no network, still a
     full answer. This is what makes the whole stack work on conference wifi.
@@ -171,7 +238,7 @@ def test_answers_from_the_local_model_when_hugging_face_is_not_configured(client
     assert body["modelInfo"]["llm"] == "local-template"
 
 
-def test_degrades_to_failed_with_a_full_body_when_hosted_inference_is_mandatory(client):
+def test_degrades_to_failed_with_a_full_body_when_hosted_inference_is_mandatory(client, without_local_gnn):
     """
     The contract Spring depends on: a clear error, not a hang and not a 500.
 
@@ -191,7 +258,7 @@ def test_degrades_to_failed_with_a_full_body_when_hosted_inference_is_mandatory(
     assert {e["stage"] for e in body["errors"]} == {"gnn", "llm"}
 
 
-def test_partial_when_only_the_gnn_is_down_and_there_is_no_fallback(client):
+def test_partial_when_only_the_gnn_is_down_and_there_is_no_fallback(client, without_local_gnn):
     """Advisory survives a dead GNN — it falls back to measured density for the prompt."""
     with stub_server(), hf_env(
         HF_API_TOKEN="test-token",
@@ -211,7 +278,7 @@ def test_partial_when_only_the_gnn_is_down_and_there_is_no_fallback(client):
     assert [e["stage"] for e in body["errors"]] == ["gnn"]
 
 
-def test_a_dead_hosted_gnn_falls_through_to_the_local_model(client):
+def test_a_dead_hosted_gnn_falls_through_to_the_local_model(client, without_local_gnn):
     """Hosted risk fails, local risk answers, hosted prose still works — the mixed path."""
     with stub_server(), hf_env(
         HF_API_TOKEN="test-token",
@@ -229,6 +296,68 @@ def test_a_dead_hosted_gnn_falls_through_to_the_local_model(client):
     assert body["modelInfo"]["gnn"] == "local-linear"
     # The advisory still came from the stub, so both halves are independently sourced.
     assert body["advisory"]["actions"] == ["Divert to Walkway"]
+
+
+def test_the_in_process_gnn_answers_when_it_is_available(client, without_tinybert):
+    """
+    Exercises the path the demo runs on, when torch and a checkpoint are present.
+
+    Skipped rather than failed when they are not: this suite must pass on a clean checkout
+    that has never installed torch, which is the whole point of keeping it out of
+    requirements.txt.
+    """
+    from app.gnn_local import local_gnn
+
+    if not local_gnn.ready:
+        pytest.skip(f"in-process GNN not loaded ({local_gnn.error})")
+
+    with hf_env(HF_API_TOKEN="", HF_GNN_URL="", HF_LLM_URL=""):
+        response = client.post("/analyze", json=VENUE_REQUEST)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok", body["errors"]
+    assert body["modelInfo"]["gnn"].startswith("congestion-gnn"), body["modelInfo"]
+
+    risk = {p["nodeId"]: p["risk"] for p in body["predictions"]}
+    assert set(risk) == {"gate-a", "walk", "exit-e"}
+    assert all(0.0 <= v <= 1.0 for v in risk.values())
+
+    # The behaviour the GNN exists for: the walkway is only 44% full, but it sits next to a
+    # gate at 93% that is pushing into it, so it must not be scored as quiet. A per-zone
+    # threshold cannot make this call — that is the entire argument for the model.
+    assert risk["walk"] > risk["exit-e"], risk
+    assert risk["gate-a"] >= risk["walk"], risk
+
+
+def test_tinybert_answers_and_takes_priority_when_it_is_enabled(client):
+    """
+    The beta path: CROWDFLOW_TINYBERT=true makes TinyBERT the model behind /analyze, ahead of
+    the trained GNN and the linear fallback.
+
+    Skipped when it is not enabled, for the same reason the GNN test skips — the suite must be
+    green on a checkout that has never set the flag or installed transformers.
+    """
+    from app.tinybert_local import tinybert_risk
+
+    if not tinybert_risk.ready:
+        pytest.skip(f"TinyBERT not loaded ({tinybert_risk.error})")
+
+    with hf_env(HF_API_TOKEN="", HF_GNN_URL="", HF_LLM_URL=""):
+        response = client.post("/analyze", json=VENUE_REQUEST)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok", body["errors"]
+    assert body["modelInfo"]["gnn"].startswith("tinybert"), body["modelInfo"]
+
+    risk = {p["nodeId"]: p["risk"] for p in body["predictions"]}
+    assert set(risk) == {"gate-a", "walk", "exit-e"}
+    assert all(0.0 <= v <= 1.0 for v in risk.values())
+
+    # Same claim the GNN test makes: the packed gate must outrank the quiet exit. The embedding
+    # term is only 30% of the score, so the feature half still has to carry the ordering.
+    assert risk["gate-a"] > risk["exit-e"], risk
 
 
 def test_risk_and_advisory_endpoints_answer_without_any_model_configured(client):

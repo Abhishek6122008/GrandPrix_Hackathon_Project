@@ -34,19 +34,72 @@ Request and response shapes mirror the Java records in
 
 ---
 
-## Three inference paths
+## Inference paths
 
 Tried best-first, and the choice is made **per step** — a working GNN endpoint with a missing
 LLM one gives hosted risk with locally written prose. Whichever answered is named in
 `modelInfo` on every response, so nobody has to guess.
 
 1. **Hugging Face Inference API** — when `HF_API_TOKEN` and the matching `HF_*_URL` are set.
-2. **In-process GNN** ([`app/gnn_local.py`](app/gnn_local.py)) — the trained congestion GNN,
-   checkpoint pulled from the Hub once at startup and run locally thereafter. This is the path
-   the project plan calls for: Hugging Face as the model registry, not a per-request network
-   dependency. Needs torch + torch-geometric, which are deliberately **not** in
-   `requirements.txt`; without them the service says so at `/health` and moves on.
-3. **Offline linear model** ([`app/scoring.py`](app/scoring.py)) — always available, no setup.
+2. **TinyBERT** ([`app/tinybert_local.py`](app/tinybert_local.py)) — risk only, and only when
+   `CROWDFLOW_TINYBERT=true`. See below.
+3. **In-process models** — pulled from the Hub once at startup, run locally thereafter. This is
+   the path the project plan calls for: Hugging Face as the model registry, not a per-request
+   network dependency.
+   - risk: [`app/gnn_local.py`](app/gnn_local.py) → `abhi1005/congestion-gnn` (needs torch +
+     torch-geometric)
+   - advisory: [`app/advisory_local.py`](app/advisory_local.py) → `Qwen/Qwen2.5-0.5B-Instruct`
+     (needs transformers)
+
+   Neither library is in `requirements.txt` on purpose; without them the service says so at
+   `/health` and uses the fallback.
+4. **Offline fallback** ([`app/scoring.py`](app/scoring.py)) — always available, no setup.
+
+### The beta setup: TinyBERT only
+
+`ai-service/.env` currently pins the beta configuration — one model, nothing else:
+
+```ini
+CROWDFLOW_TINYBERT=true       # huawei-noah/TinyBERT_General_4L_312D, ~55 MB, CPU
+CROWDFLOW_ADVISORY_LOCAL=false  # advisory comes from the templates
+# CROWDFLOW_GNN_REPO=abhi1005/congestion-gnn   # the trained GNN, parked
+```
+
+TinyBERT is ported from the `Python Backend/` service that was deleted when the repo was
+flattened (commits `5fe7d5a` → `a3f8b10`). It brings that service's model back without bringing
+back a second FastAPI process: `/analyze` already carries the graph and the density, Spring
+already calls it, the frontend already renders the result. Only the scorer changed.
+
+It renders each zone's six features as a sentence, mean-pools TinyBERT's last hidden state into
+a 312-dim vector, and blends the vector's norm (30%) with the weighted raw features (70%) — the
+original's design, with two changes:
+
+- The raw half uses this service's tuned `scoring.WEIGHTS` over `FEATURE_COLUMNS`, not the
+  original's eight separate fields, so every risk path here scores the same inputs the same way.
+- The embedding norm is divided by a fixed scale (`CROWDFLOW_TINYBERT_SCALE`), not by the batch
+  maximum. Dividing by the batch max made a zone's risk depend on which *other* zones were in
+  the request — a one-node graph always maxed that term, and adding a calm zone moved every
+  other zone's number. `tests/test_tinybert.py` pins that down.
+
+**It is 30% of the score, and it is the weaker 30%.** The norm of a sentence embedding is not a
+congestion signal; the ordering in the output comes from the feature half. Worth knowing before
+anyone points at it as the reason a prediction was good.
+
+When it is on it takes priority over the trained GNN, on the grounds that setting the flag is
+an explicit request for it. Unset — the default — it never loads and nothing downloads.
+
+### The advisory model is guarded
+
+`Qwen2.5-0.5B-Instruct` is fluent but small. Within minutes of being wired up it invented a
+destination gate that did not exist, raised an alarm about a venue with nothing wrong with it,
+and advised routing a crowd from one congested zone straight into another. All three read
+perfectly well.
+
+So `_check_zones` discards any sentence naming a zone that was not in the prompt, `/analyze`
+does not call the model when nothing is above the warning line, and generation is deterministic
+(`do_sample=False`) so the same crowd state always yields the same advice. Anything rejected
+falls back to the templates — **fluent and wrong is worse than plain and right** for guidance
+someone is about to act on.
 
 ### The feature contract
 

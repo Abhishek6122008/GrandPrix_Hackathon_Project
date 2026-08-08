@@ -178,6 +178,23 @@ def static_features(layout: dict) -> dict[str, dict[str, float]]:
     }
 
 
+#: How far a run's node capacities may stray from the layout's. Wide enough that the same node
+#: is small in one run and large in another, so its capacity cannot identify it.
+CAPACITY_JITTER = (0.45, 2.2)
+
+
+def jitter_capacities(layout: dict, rng: random.Random) -> dict:
+    """A copy of the layout with every node's capacity randomly scaled. See build_samples."""
+    low, high = CAPACITY_JITTER
+    return {
+        **layout,
+        "nodes": [
+            {**node, "capacity": max(20, int(node["capacity"] * rng.uniform(low, high)))}
+            for node in layout["nodes"]
+        ],
+    }
+
+
 def encode_trend(now: float, then: float) -> float:
     """DensityDetector's rule, as the number the model sees. See TREND_DEADBAND."""
     delta = now - then
@@ -201,13 +218,26 @@ def build_samples(layout: dict, runs: int, seed: int) -> list[dict]:
     # (run, tick, node) meant constructing the whole adjacency map a few million times for a
     # 300-run generation — minutes of pure waste before a single sample was written.
     adj = adjacency(layout)
-    static = static_features(layout)
 
     for run_id in range(runs):
-        crowd = rng.randint(1_500, 9_000)
-        arrival = rng.randint(80, 400)
+        # Crowd and arrival span quiet events as well as crushes. The earlier range started at
+        # 1,500 people and 80 arrivals a tick into a venue holding 3,920, so *every* run
+        # flooded within seconds: the smallest zone was critical in 95% of all ticks. A model
+        # trained on that learns "the merch stand is critical" as a fact about the merch stand,
+        # and then rates an empty one at 100% risk — which is exactly what it did.
+        crowd = rng.randint(200, 9_000)
+        arrival = rng.randint(4, 400)
         reroute = rng.random() < 0.5
-        history = simulate(layout, crowd, ticks=80, arrival_rate=arrival, reroute=reroute, rng=rng)
+
+        # Capacities are jittered per run so `capacity_norm` stops being a node fingerprint.
+        # Training on one fixed layout means capacity_norm and degree_norm are constant per
+        # node — together they name the node, and the model will happily memorise per-node base
+        # rates instead of learning anything about density. Varying the venue forces it to read
+        # the dynamic features, which are the only ones that transfer to a real venue.
+        run_layout = jitter_capacities(layout, rng)
+        history = simulate(run_layout, crowd, ticks=80, arrival_rate=arrival,
+                           reroute=reroute, rng=rng)
+        static = static_features(run_layout)
 
         for tick in range(len(history) - HORIZON):
             # Both look back as far as the window allows and no further, exactly as the service
@@ -274,8 +304,29 @@ def self_check() -> None:
     assert all(0.0 <= d <= 1.0 for frame in history for d in frame.values()), "density out of range"
     assert max(max(frame.values()) for frame in history) > 0.7, "no congestion built up at all"
 
-    rows = build_samples(layout, runs=1, seed=7)
+    rows = build_samples(layout, runs=12, seed=7)
     assert rows and set(rows[0]) >= {"density", "density_ahead", "node_id"}
+
+    # The saturation guard. If a zone is critical in nearly every tick, the model can score
+    # well on it by ignoring its inputs and memorising the zone — which is precisely what
+    # happened: the merch stand was critical in 95% of ticks and the trained GNN went on to
+    # rate an *empty* merch stand at 100% risk. A balanced mix is not a nicety here.
+    per_node: dict[str, list[float]] = {}
+    for row in rows:
+        per_node.setdefault(row["node_id"], []).append(row["density_ahead"])
+    worst, share = max(
+        ((node, sum(v >= 0.85 for v in values) / len(values)) for node, values in per_node.items()),
+        key=lambda pair: pair[1],
+    )
+    assert share < 0.90, (
+        f"'{worst}' is critical in {share:.0%} of ticks — the runs are saturated and a model "
+        "trained on this will memorise the zone instead of reading its density. Widen the "
+        "crowd/arrival range in build_samples."
+    )
+
+    # ...and the opposite failure: if nothing ever congests there is nothing to learn.
+    assert any(v >= 0.85 for values in per_node.values() for v in values), \
+        "no zone ever went critical — the runs are too quiet to train on"
 
     # The feature contract. Duplicated here as a literal rather than imported from
     # ml/gnn/model.py on purpose — this module is stdlib-only so it can run before anyone
