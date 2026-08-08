@@ -125,14 +125,30 @@ public class FastApiClient {
         }
 
         String status = response.status() == null ? "unknown" : response.status();
+        // Name the model that answered, not just that something did. The AI layer has three
+        // paths — hosted, in-process GNN, linear fallback — and "ok" looks identical for all
+        // three, so without this the one thing an operator most wants to know is invisible.
+        String model = modelName(response);
         if (response.errors() != null && !response.errors().isEmpty()) {
             String stages = response.errors().stream()
                     .map(AnalyzeResponse.AnalyzeError::stage).distinct().reduce((a, b) -> a + "," + b).orElse("");
-            session.setAiStatus(status + " (" + stages + " unavailable)");
+            session.setAiStatus(status + " · " + model + " (" + stages + " unavailable)");
             log.info("analyse {} for session {}: {}", status, session.getId(), response.errors());
         } else {
-            session.setAiStatus(status);
+            session.setAiStatus(status + " · " + model);
         }
+    }
+
+    /** Shortens what /analyze reported into something that fits a status line. */
+    private String modelName(AnalyzeResponse response) {
+        if (response.modelInfo() == null || response.modelInfo().gnn() == null) {
+            return "unknown model";
+        }
+        String gnn = response.modelInfo().gnn();
+        // The in-process path reports "congestion-gnn (huggingface hub: owner/repo)"; the URL
+        // is not useful on a status badge, the fact that it is the real model is.
+        int detail = gnn.indexOf(" (");
+        return detail > 0 ? gnn.substring(0, detail) : gnn;
     }
 
     /** Builds the {graph, density, history, context} body. See {@link AnalyzeRequest}. */

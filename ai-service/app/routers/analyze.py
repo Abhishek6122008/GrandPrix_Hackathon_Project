@@ -29,6 +29,7 @@ from fastapi.responses import JSONResponse
 from app import scoring
 from app.clients import hf_gnn_client, hf_llm_client
 from app.clients.hf_gnn_client import HfResult
+from app.advisory_local import HallucinatedZone, local_advisory
 from app.config import settings
 from app.gnn_local import local_gnn
 from app.schemas.analyze_schema import Advisory, AnalyzeRequest, AnalyzeResponse
@@ -113,13 +114,40 @@ async def analyze(request: AnalyzeRequest):
         # Nothing predicted, so speak about what was measured rather than staying silent.
         risk_by_node = {node_id: request.density.get(node_id, 0.0) for node_id in features.node_ids}
 
+    # Same three sources, same order, same reasoning as the risk step above.
+    prompt = preprocessing.build_advisory_prompt(request, risk_by_node)
     llm_result = HfResult(error="hugging face LLM not configured")
+
     if settings.hf_llm_configured:
-        llm_result = await hf_llm_client.generate_advisory(
-            preprocessing.build_advisory_prompt(request, risk_by_node)
-        )
+        llm_result = await hf_llm_client.generate_advisory(prompt)
         if not llm_result.ok:
-            log.warning("hosted LLM failed, falling back to local: %s", llm_result.error)
+            log.warning("hosted LLM failed, falling back: %s", llm_result.error)
+
+    # Only ask the model when there is something to advise about. On a quiet venue it has
+    # nothing to say and says it anyway — asked about a venue with no zone above the warning
+    # line it still answered "reroute all attendees from the high-risk area", inventing both
+    # the emergency and the area. The template handles "all clear" correctly and instantly.
+    concerning = [
+        node_id for node_id, risk in risk_by_node.items()
+        if risk >= scoring.WARNING or request.density.get(node_id, 0.0) >= scoring.WARNING
+    ]
+
+    if not llm_result.ok and local_advisory.ready and concerning:
+        names = {node.id: (node.name or node.id) for node in request.graph.nodes}
+        try:
+            llm_result = HfResult(
+                value=local_advisory.generate(
+                    prompt, known_zones=[names.get(n, n) for n in names]
+                ),
+                model=local_advisory.model_id,
+            )
+        except HallucinatedZone as exc:
+            # Fluent and wrong is worse than plain and right for safety guidance.
+            log.warning("advisory model hallucinated, using templates instead: %s", exc)
+            llm_result = HfResult(error=f"local advisory hallucinated: {exc}")
+        except Exception as exc:  # noqa: BLE001 — generation must not 500 the endpoint
+            log.warning("local advisory generation failed: %s", exc)
+            llm_result = HfResult(error=f"local advisory: {exc}")
 
     if not llm_result.ok and settings.LOCAL_FALLBACK:
         llm_result = HfResult(

@@ -29,6 +29,7 @@ from fastapi.middleware.cors import CORSMiddleware
 load_dotenv()
 
 from app import scoring  # noqa: E402  (must follow load_dotenv)
+from app.advisory_local import local_advisory  # noqa: E402
 from app.config import settings  # noqa: E402
 from app.gnn_local import local_gnn  # noqa: E402
 from app.routers import advisory, analyze, risk  # noqa: E402
@@ -53,6 +54,7 @@ async def lifespan(app: FastAPI):
     """
     tinybert_risk.load()
     local_gnn.load()
+    local_advisory.load()
 
     config = settings.describe()
     log.info(
@@ -61,7 +63,9 @@ async def lifespan(app: FastAPI):
         else f"tinybert ({tinybert_risk.model_id})" if tinybert_risk.ready
         else f"in-process ({local_gnn.source})" if local_gnn.ready
         else scoring.MODEL_NAME,
-        "hugging face" if config["hostedLlm"] else scoring.ADVISORY_MODEL_NAME,
+        "hugging face" if config["hostedLlm"]
+        else f"in-process ({local_advisory.model_id})" if local_advisory.ready
+        else scoring.ADVISORY_MODEL_NAME,
         "on" if config["localFallback"] else "OFF (hosted inference is mandatory)",
     )
     yield
@@ -109,9 +113,12 @@ def health() -> dict:
                    else "tinybert" if tinybert_risk.ready
                    else "congestion-gnn" if local_gnn.ready
                    else scoring.MODEL_NAME,
-            "advisory": "huggingface" if config["hostedLlm"] else scoring.ADVISORY_MODEL_NAME,
+            "advisory": "huggingface" if config["hostedLlm"]
+                        else local_advisory.model_id if local_advisory.ready
+                        else scoring.ADVISORY_MODEL_NAME,
         },
         "tinybert": tinybert_risk.describe(),
         "localGnn": local_gnn.describe(),
+        "localAdvisory": local_advisory.describe(),
         "config": config,
     }
