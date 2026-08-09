@@ -30,7 +30,6 @@ recent history and the run context, and returns risk plus prose in a single roun
 
 Request and response shapes mirror the Java records in
 `backend/src/main/java/com/crowdflow/dto/AnalyzeRequest.java` and `AnalyzeResponse.java`.
-**If you change a field name in one, change it in the other — nothing checks.**
 
 ---
 
