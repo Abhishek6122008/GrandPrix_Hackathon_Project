@@ -73,6 +73,13 @@ export const api = {
   // --- venues -------------------------------------------------------------
   createVenue: (venue) => post('/venues', venue),
   getVenue: (id) => request(`/venues/${id}`),
+  /**
+   * Every venue the backend has stored, across restarts.
+   *
+   * How a venue code resolves when nothing is running on it. Sessions are transient;
+   * a code printed on a wall is not, so the walker portal looks here before giving up.
+   */
+  listVenues: () => request('/venues'),
   /** Walking path from a zone to the nearest exit, over the venue's own edges. */
   getVenueRoute: (id, fromNodeId) =>
     request(`/venues/${id}/route?from=${encodeURIComponent(fromNodeId)}`),

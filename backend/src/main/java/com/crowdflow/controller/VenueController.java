@@ -2,7 +2,9 @@ package com.crowdflow.controller;
 
 import com.crowdflow.model.ReroutePath;
 import com.crowdflow.model.Venue;
+import com.crowdflow.repository.FileVenueRepository;
 import com.crowdflow.repository.VenueRepository;
+import java.util.List;
 import com.crowdflow.service.VenueValidator;
 import com.crowdflow.service.routing.RerouteEngine;
 import jakarta.validation.Valid;
@@ -40,6 +42,20 @@ public class VenueController {
     @GetMapping("/{id}")
     public Venue get(@PathVariable String id) {
         return venues.getOrThrow(id);
+    }
+
+    /**
+     * {@code GET /venues} — every stored venue.
+     *
+     * <p>Exists so an attendee's venue code resolves even when no session is running on it.
+     * Previously the walker portal could only find a venue through {@code GET /sessions}, so a
+     * code printed on signage stopped working the moment the operator stopped the run — the
+     * building was still there, but the app said the code was unknown. A venue outlives any
+     * one session, and this endpoint is what makes the code outlive it too.
+     */
+    @GetMapping
+    public List<Venue> list() {
+        return venues instanceof FileVenueRepository store ? store.findAll() : List.of();
     }
 
     /**

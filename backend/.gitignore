@@ -2,3 +2,9 @@ target/
 .mvn/wrapper/maven-wrapper.jar
 *.iml
 .idea/
+
+# Venue store — runtime data, not source. See FileVenueRepository.
+data/
+
+# A local JDK someone unpacked inside the module. 373MB of binaries, not source.
+oracleJdk-*/
