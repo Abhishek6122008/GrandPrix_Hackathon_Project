@@ -62,7 +62,8 @@ export function useCrowdFlow() {
           venue: venueJson,
           crowdSize: settings.crowdSize ?? 2500,
           arrivalRate: settings.arrivalRate ?? 25,
-          maxTicks: settings.maxTicks ?? 1200,
+          // ~10 minutes at the backend's 100ms tick. See the note in SessionSetup.
+          maxTicks: settings.maxTicks ?? 6000,
           tickSeconds: settings.tickSeconds ?? 1.0,
           rerouteEnabled: settings.rerouteEnabled ?? true,
         });
@@ -84,6 +85,32 @@ export function useCrowdFlow() {
         setInfo(existing);
         setSessionId(id);
         return existing;
+      }),
+    [run],
+  );
+
+  /**
+   * Opens a stored venue with no session behind it — the map, without live crowd.
+   *
+   * An attendee's code identifies a *building*, and the building is on disk whether or not
+   * anyone is running a simulation on it right now. Refusing to show the map between runs
+   * would make a code printed on a wall work only during a demo, which defeats the point of
+   * printing it. Density stays zero and the UI says the venue is not live.
+   */
+  const attachVenue = useCallback(
+    (code) =>
+      run(async () => {
+        const venueJson = await api.getVenue(code);
+        setVenue(venueJson);
+        setInfo({
+          sessionId: null,
+          venueId: venueJson.id,
+          venueName: venueJson.name,
+          status: "OFFLINE",
+          tick: 0,
+        });
+        setSessionId(null);
+        return venueJson;
       }),
     [run],
   );
@@ -136,6 +163,7 @@ export function useCrowdFlow() {
     error: error ?? socketError,
     create,
     attach,
+    attachVenue,
     start,
     pause,
     stop,

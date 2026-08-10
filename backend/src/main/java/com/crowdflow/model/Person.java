@@ -37,6 +37,29 @@ public class Person {
 
     private boolean arrived;
 
+    /**
+     * The places this person still intends to visit, in order, after the current goal.
+     *
+     * <p>This is what makes a crowd a crowd rather than a queue. Previously every agent was
+     * routed gate → nearest exit on spawn, so the venue only ever showed people traversing it:
+     * seating filled and emptied at walking pace, concessions saw traffic only if they happened
+     * to sit on someone's shortest path, and the density map was really a map of the shortest
+     * path out. Real attendees arrive, go somewhere, *stay there*, and leave later — and the
+     * congestion that matters is produced by that staying, and by everyone leaving at once.
+     */
+    private final List<String> itinerary = new ArrayList<>();
+
+    /**
+     * Ticks left to linger at the current stop before moving on. Zero means "keep walking".
+     *
+     * <p>Held as a countdown rather than an absolute tick so a paused session does not have
+     * everyone's dwell expire the moment it resumes.
+     */
+    private int dwellTicksRemaining;
+
+    /** True once this person has started for an exit and will not stop anywhere else. */
+    private boolean leaving;
+
     public Person(String id, Type type, double desiredSpeed, double radius,
                   double x, double y, String currentNodeId) {
         this.id = id;
@@ -91,5 +114,40 @@ public class Person {
     /** Initial route assignment — does not count as a reroute. */
     public void setRoute(List<String> newRoute) {
         this.route = new ArrayList<>(newRoute);
+    }
+
+    /* ---- itinerary ------------------------------------------------------- */
+
+    public List<String> getItinerary() { return itinerary; }
+    public boolean isLeaving() { return leaving; }
+    public void setLeaving(boolean leaving) { this.leaving = leaving; }
+
+    /** Queues the stops this person means to visit, in order. Replaces any existing plan. */
+    public void setItinerary(List<String> stops) {
+        itinerary.clear();
+        itinerary.addAll(stops);
+    }
+
+    /** The next place to head for once the current dwell finishes, or null when done. */
+    public String popNextStop() {
+        return itinerary.isEmpty() ? null : itinerary.remove(0);
+    }
+
+    public boolean isDwelling() { return dwellTicksRemaining > 0; }
+    public int getDwellTicksRemaining() { return dwellTicksRemaining; }
+    public void startDwell(int ticks) { this.dwellTicksRemaining = Math.max(0, ticks); }
+
+    /** Counts one tick off the dwell. Returns true on the tick it finishes. */
+    public boolean tickDwell() {
+        if (dwellTicksRemaining <= 0) {
+            return false;
+        }
+        dwellTicksRemaining--;
+        return dwellTicksRemaining == 0;
+    }
+
+    /** True when the route is spent and there is nowhere left to go. */
+    public boolean isIdle() {
+        return route.isEmpty() && itinerary.isEmpty() && dwellTicksRemaining <= 0;
     }
 }

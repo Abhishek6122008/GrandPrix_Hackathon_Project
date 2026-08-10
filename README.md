@@ -38,10 +38,20 @@ Three processes. Start them in any order — each degrades gracefully while the 
 cd ai-service
 python -m venv .venv
 .venv/Scripts/python -m pip install -r requirements.txt   # macOS/Linux: .venv/bin/python
+
+# Optional: the layout→graph pipeline behind Layout Studio (OpenCV/NumPy/scikit-image).
+# Everything else runs without it; only /layout/* is unavailable when it is missing.
+.venv/Scripts/python -m pip install -r requirements-layout.txt
+
 .venv/Scripts/python -m uvicorn app.main:app --port 8000
 ```
 
 No configuration, no API token and no model download. See [Which model answers](#which-model-answers).
+
+`GET /health` reports `layout.available`, so the UI can say "AI tracing is unavailable"
+rather than letting an operator upload a plan and get a 404. The pipeline runs CV-only by
+default; set `LAYOUT_VLM_ENABLED=true` (see `.env.layout.example`) to add the Qwen2.5-VL
+semantic stage, which needs the extra GPU dependencies listed in `requirements-layout.txt`.
 
 ### 2. Backend (port 8080)
 
@@ -227,23 +237,42 @@ Re-score an existing checkpoint without retraining:
 
 All three read the same live session; they differ in what they are allowed to see.
 
-- **Walker** (attendee) — the venue map, live zone congestion, and a real walking route to the
-  nearest exit computed over the venue's own edges. Position is **zone-level and self-declared**:
-  the system simulates a crowd, it does not track anyone's phone, and the UI says so instead of
-  drawing a false accuracy circle. Other attendees are never shown.
-- **Client** (organiser) — session setup and start/pause/stop, the live map with agent positions,
-  per-zone occupancy, the AI advisory, and the diversion overlay.
+- **Walker** (attendee) — checks in with the **venue code** from the entrance signage, then gets
+  the venue map with a route out that is coloured by live congestion: blue clear, amber moderate,
+  orange heavy, red severe. The route is planned **around** the crowd rather than through it
+  (`src/crowdRouting.js`), and the banner says when it has diverted and what that cost in metres.
+  Position is **zone-level and self-declared**: the system simulates a crowd, it does not track
+  anyone's phone, and the UI says so instead of drawing a false accuracy circle. Other attendees
+  are never shown.
+- **Client** (organiser) — sets the venue code attendees check in with, traces a floor plan into a
+  walkable graph on the **AI layout** tab, then session setup and start/pause/stop, the live map
+  with agent positions, per-zone occupancy, the AI advisory, and a **crowd-safety panel** ranking
+  the zones that are becoming dangerous with what to do about each.
 - **Admin** — every session on the backend, aggregate figures, and the alert feed.
+
+### Venue codes
+
+A venue code (`WEMBLEY-01`) is the venue's `id`. It is client-supplied on `POST /venues`, travels
+inline on `POST /sessions`, and comes back on every `SessionInfo` as `venueId` — so an attendee
+typing a code resolves to the running session through `GET /sessions` with no new endpoint. Codes
+are stable for the life of the venue, which is what makes them printable; a session id is
+regenerated per run and cannot go on a sign.
 
 ---
 
 ## Tests
 
 ```bash
-cd backend    && ./mvnw test                      # 22 tests
-cd ai-service && .venv/Scripts/python -m pytest tests -q   # 8 tests
+cd backend    && ./mvnw test                               # 22 tests
+cd ai-service && .venv/Scripts/python -m pytest tests -q   # 40 tests (16 layout pipeline)
 cd ai-service && .venv/Scripts/python -m app.scoring       # model self-check
+cd frontend   && npm test          # routing, hazards and venue codes
+cd frontend   && npm run test:render   # every route + live component renders without throwing
 ```
+
+`frontend/src/__fixtures__/tracedVenue.json` is a graph the layout pipeline really produced from a
+floor-plan PNG — 36 junction nodes and dead ends, not a tidy authored venue — so the router is
+tested against the awkward shape it has to handle in practice.
 
 ---
 

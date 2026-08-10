@@ -6,10 +6,18 @@ import React, {
   useState,
   useCallback,
 } from "react";
+import { motion, AnimatePresence, useReducedMotion } from "motion/react";
 import { api } from "./src/api.js";
 import { useCrowdFlow } from "./src/useCrowdFlow.js";
 import { toMapVenue } from "./src/venueAdapter.js";
 import sampleVenue from "./src/sampleVenue.json";
+import LayoutStudio from "./src/LayoutStudio.jsx";
+import {
+  TRAFFIC_BANDS, planRoute, rankHazards, hazardWarning, trafficBand,
+} from "./src/crowdRouting.js";
+import {
+  normaliseCode, codeError, suggestCode, resolveSessionForCode,
+} from "./src/venueCode.js";
 import {
   DoorOpen, Footprints, UtensilsCrossed, Armchair, LogOut, TrendingUp,
   TrendingDown, Minus, Flag, Radio, Zap, AlertTriangle, ChevronLeft,
@@ -256,8 +264,14 @@ const STYLE = `
 
   .cf-reveal{ opacity:0; transform:translateY(22px); transition:opacity .7s cubic-bezier(0.16,1,0.3,1), transform .7s cubic-bezier(0.16,1,0.3,1); }
   .cf-reveal.cf-in{ opacity:1; transform:translateY(0); }
-  @keyframes cf-page-in{ from{ opacity:0; transform:translateY(14px); } to{ opacity:1; transform:translateY(0); } }
-  .cf-page-in{ animation:cf-page-in .45s cubic-bezier(0.16,1,0.3,1) both; }
+
+  /* Page entrance is owned by the <AnimatePresence> around <main>, not by CSS.
+     This rule used to run its own opacity+translateY keyframe on each page root; with
+     both animating the same two properties on nested elements, a route change played
+     the fade twice and the second one started before the first had finished, which read
+     as a stutter. The class is left defined — it is still on every page root — so it
+     stays a valid hook without competing for the same properties. */
+  .cf-page-in{ animation:none; }
 
   .cf-nav-link{ position:relative; }
   .cf-nav-link::after{ content:''; position:absolute; left:0; right:0; bottom:-7px; height:2px; border-radius:2px;
@@ -271,7 +285,6 @@ const STYLE = `
     .cf-mesh span{ animation:none !important; }
     .cf-marquee-track,.cf-dash,.cf-flow,.cf-bounce,.cf-ping,.cf-pulse{ animation:none !important; }
     .cf-reveal{ opacity:1 !important; transform:none !important; transition:none !important; }
-    .cf-page-in{ animation:none !important; }
   }
 `;
 
@@ -487,11 +500,17 @@ const heatOpacity = (d) => 0.18 + Math.min(1, Math.max(0, d)) ** 0.55 * 0.72;
    optional directions polyline.
    ========================================================================== */
 
-function VenueMap({
+export function VenueMap({
   venue, people = [], crowdTotal = 0, me = null, route = null, showDensity = true,
   showPeople = true, showPois = true, showSprites = true,
   underlay = null, underlayOpacity = 0.25,
   height = 460, onSelectHall = null, selectedHall = null,
+  /**
+   * A `planRoute` result. Draws the walking route as per-hop coloured segments —
+   * red through a jam, blue through clear ground — the way a traffic layer does.
+   * `route` (a bare point list) is still honoured for callers that only have one.
+   */
+  trafficRoute = null,
 }) {
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -886,6 +905,25 @@ function VenueMap({
           );
         })}
 
+        {/* Critical zones, ringed and pulsing.
+            The heat blob already colours them, but colour alone loses on a map with
+            several busy areas — an expanding ring is the one thing on a static plan that
+            catches an eye that is looking somewhere else. Only for zones actually past
+            the critical line, so it never becomes ambient decoration.
+            `cf-ping` is the existing keyframe, and it is already disabled under
+            prefers-reduced-motion along with everything else. */}
+        {showDensity && venue.halls
+          .filter((h) => (h.density ?? 0) > 0.85)
+          .map((h) => (
+            <g key={`crit-${h.id}`} style={{ pointerEvents: "none" }}>
+              <circle cx={h.center[0]} cy={h.center[1]} r={h.radius} fill="none"
+                stroke="var(--cf-red)" strokeWidth="0.5" opacity="0.9" />
+              <circle cx={h.center[0]} cy={h.center[1]} r={h.radius} fill="none"
+                stroke="var(--cf-red)" strokeWidth="0.4" className="cf-ping"
+                style={{ transformOrigin: `${h.center[0]}px ${h.center[1]}px` }} />
+            </g>
+          ))}
+
         {/* Entrance and exit signage.
 
             Pushed radially outward from the venue's own centre so a badge never lands on top
@@ -931,8 +969,35 @@ function VenueMap({
             );
           })}
 
-        {/* directions polyline — casing + core, Google-style */}
-        {route && route.length > 1 && (
+        {/* Directions.
+            Casing first as one continuous dark stroke, then each hop drawn over it in
+            its own traffic colour. Two passes rather than one stroke per segment with
+            its own casing, because per-segment casings overlap at every junction and
+            leave a dark notch through the middle of the line. */}
+        {trafficRoute?.segments?.length > 0 ? (
+          <g style={{ pointerEvents: "none" }}>
+            <polyline
+              points={trafficRoute.points.map((p) => p.join(",")).join(" ")}
+              fill="none" stroke="#05070B" strokeWidth="3.4"
+              strokeLinecap="round" strokeLinejoin="round" opacity="0.9" />
+            {trafficRoute.segments.map((seg) => (
+              <line key={seg.id} x1={seg.from[0]} y1={seg.from[1]}
+                x2={seg.to[0]} y2={seg.to[1]}
+                stroke={seg.band.color} strokeWidth="1.9"
+                strokeLinecap="round" />
+            ))}
+            {/* Flow direction, over the colour rather than replacing it: the dashes
+                say which way to walk, the colour underneath says how bad it is. */}
+            <polyline
+              points={trafficRoute.points.map((p) => p.join(",")).join(" ")}
+              fill="none" stroke="rgba(255,255,255,0.75)" strokeWidth="0.55"
+              strokeLinecap="round" strokeLinejoin="round" className="cf-flow" />
+            <circle
+              cx={trafficRoute.points[trafficRoute.points.length - 1][0]}
+              cy={trafficRoute.points[trafficRoute.points.length - 1][1]}
+              r="1.8" fill="var(--cf-violet)" stroke="#05070B" strokeWidth="0.5" />
+          </g>
+        ) : route && route.length > 1 && (
           <>
             <polyline points={route.map((p) => p.join(",")).join(" ")} fill="none"
               stroke="#0A2A5E" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" />
@@ -1015,6 +1080,23 @@ function VenueMap({
               <span className="w-2 h-2 rounded-sm" style={{ background: "var(--cf-violet)" }} />EXIT
             </span>
           </div>
+          {/* Route colours, shown only when a route is on screen. The density ramp above
+              and this are two different scales — one paints zones, one paints the line
+              you walk — so labelling them separately stops the line being read as
+              another heat blob. */}
+          {trafficRoute?.segments?.length > 0 && (
+            <div className="mt-2.5 pt-2 flex flex-col gap-1"
+              style={{ borderTop: "1px solid var(--cf-line)" }}>
+              <div className="cf-accent text-[9px] cf-dim2">YOUR ROUTE</div>
+              {TRAFFIC_BANDS.map((band) => (
+                <span key={band.id} className="flex items-center gap-1.5 cf-mono text-[9px] cf-dim2">
+                  <span className="w-3 h-[3px] rounded-full" style={{ background: band.color }} />
+                  {band.label}
+                </span>
+              ))}
+            </div>
+          )}
+
           {/* The ratio, stated rather than implied. A map that draws 140 figures for 2,000
               people is lying unless it says so. */}
           {showPeople && crowd.each > 1 && (
@@ -1090,6 +1172,69 @@ function Eyebrow({ children }) {
   return (
     <div className="inline-flex items-center gap-2 cf-accent text-[11px] cf-chip rounded-full px-3 py-1 cf-dim">
       {children}
+    </div>
+  );
+}
+
+/**
+ * A number that counts to its new value instead of jumping.
+ *
+ * Used on the live metrics, where the value changes five times a second. The point is
+ * not decoration: a figure that snaps between 1,840 and 1,920 is read as noise, while
+ * one that travels is read as a direction — which is the thing an operator is actually
+ * looking for. Short duration so it has always settled before the next frame lands.
+ *
+ * Falls straight through to the plain number under `prefers-reduced-motion`.
+ */
+function CountUp({ value, format = (n) => Math.round(n).toLocaleString(), duration = 400 }) {
+  const reduced = usePrefersReducedMotion();
+  const [shown, setShown] = useState(value);
+  const fromRef = useRef(value);
+  const rafRef = useRef(0);
+
+  useEffect(() => {
+    if (reduced) { setShown(value); return undefined; }
+
+    const from = fromRef.current;
+    const delta = value - from;
+    if (delta === 0) return undefined;
+
+    const started = performance.now();
+    const tick = (now) => {
+      const t = Math.min(1, (now - started) / duration);
+      // easeOutCubic: fast to start, settles gently — reads as arriving, not sliding.
+      const eased = 1 - (1 - t) ** 3;
+      setShown(from + delta * eased);
+      if (t < 1) rafRef.current = requestAnimationFrame(tick);
+      else fromRef.current = value;
+    };
+    rafRef.current = requestAnimationFrame(tick);
+
+    return () => cancelAnimationFrame(rafRef.current);
+  }, [value, duration, reduced]);
+
+  // Keep the start point honest when a re-render interrupts an animation in flight.
+  useEffect(() => { if (reduced) fromRef.current = value; }, [value, reduced]);
+
+  return <>{format(shown)}</>;
+}
+
+/**
+ * A live value whose colour and width both track a 0–1 ratio.
+ *
+ * One component rather than a bar and a number wired up separately at each call site,
+ * because the two must never disagree — a bar drawn from density and a percentage
+ * printed from occupancy is exactly how a dashboard starts lying.
+ */
+function DensityBar({ density, height = 4, color }) {
+  const reduced = usePrefersReducedMotion();
+  const pct = Math.min(100, Math.max(0, (density ?? 0) * 100));
+  return (
+    <div className="rounded-full bg-white/5 overflow-hidden" style={{ height }}>
+      <motion.div className="h-full rounded-full"
+        initial={false}
+        animate={{ width: `${pct}%`, background: color ?? trafficBand(density).color }}
+        transition={reduced ? { duration: 0 } : { duration: 0.45, ease: [0.16, 1, 0.3, 1] }} />
     </div>
   );
 }
@@ -1688,15 +1833,15 @@ const ROLES = {
   walker: {
     key: "walker", label: "Walker", who: "Attendees & visitors", color: "var(--cf-blue-hi)", Icon: Ticket,
     tagline: "Find yourself. Find the way out.",
-    blurb: "Enter the venue ID printed on your ticket and the map loads with you on it. You'll see the exits, water points and restrooms — and which route is actually clear right now.",
-    can: ["See your own live position inside the venue", "Nearest clear exit, with walking route", "Water points, restrooms, concessions", "Crowding warnings on your route"],
+    blurb: "Type the venue code from the signage at your entrance and the map loads with you on it. Routes are coloured by how crowded they actually are right now — blue is clear, red is a crush — and the way out you're shown goes around the jam, not through it.",
+    can: ["A live map of the venue you checked into", "A route out that avoids the crowds", "Colour-coded congestion on every path", "Water points, restrooms, concessions"],
     cannot: ["Other attendees' identities or positions", "Venue analytics or capacity figures", "Anything outside the venue geofence"],
   },
   client: {
     key: "client", label: "Client", who: "Venue owners & organisers", color: "var(--cf-orange)", Icon: Building2,
     tagline: "Upload a floor plan. Get a live map.",
-    blurb: "Drop in a flat 2D image of your venue and we trace it into a working map — halls, corridors, gates. From there it's live: occupancy per zone, capacity limits you set, alerts when a zone starts filling.",
-    can: ["Upload and trace 2D floor plans", "Define halls, capacities and gates", "Live occupancy per zone", "Alerts and reroute advisories"],
+    blurb: "Drop in a flat 2D image of your venue and AI traces it into a working map — halls, corridors, gates, and the pathways between them. Set a venue code for your signage, then it's live: occupancy per zone, and warnings the moment an area starts becoming dangerous.",
+    can: ["AI tracing of 2D floor plans into pathways", "A venue code attendees check in with", "Live occupancy and crowd-safety warnings", "Reroute advisories as zones fill"],
     cannot: ["Individual attendee identities", "Other clients' venues or data", "Platform-wide analytics"],
   },
   admin: {
@@ -1923,24 +2068,77 @@ function WalkerApp({ session, navigate, signOut }) {
   const [entered, setEntered] = useState("");
   const [joinError, setJoinError] = useState("");
   const { sessions } = useSessionList(8000);
+
+  /** Venues stored on the backend, whether or not anything is running on them. */
+  const [storedVenues, setStoredVenues] = useState([]);
+  useEffect(() => {
+    let cancelled = false;
+    api.listVenues()
+      .then((list) => { if (!cancelled) setStoredVenues(list ?? []); })
+      .catch(() => { /* older backend without GET /venues — live sessions still work */ });
+    return () => { cancelled = true; };
+  }, []);
+
+  /**
+   * Every venue an attendee could check into, live ones first.
+   *
+   * Merged by code rather than concatenated, so a venue that is both stored and running
+   * appears once — marked live, which is the state that matters to someone standing in it.
+   */
+  const knownVenues = useMemo(() => {
+    const byCode = new Map();
+    for (const v of storedVenues) {
+      const code = normaliseCode(v.id);
+      if (code) byCode.set(code, { code, name: v.name ?? code, live: false });
+    }
+    for (const s of sessions) {
+      const code = normaliseCode(s.venueId);
+      if (!code) continue;
+      byCode.set(code, { code, name: s.venueName ?? code, live: s.status === "RUNNING" });
+    }
+    return [...byCode.values()].sort((a, b) => (b.live ? 1 : 0) - (a.live ? 1 : 0));
+  }, [storedVenues, sessions]);
   const flow = useCrowdFlow();
-  const { venue, info, connected } = flow;
+  const { venue, rawVenue, frame, info, connected } = flow;
 
   // Where the attendee says they are. The backend has no per-person GPS — it simulates a crowd,
   // it does not track your phone — so this is zone-level and self-declared, and the UI says so
   // rather than drawing a false 3-metre accuracy circle.
   const [atNodeId, setAtNodeId] = useState(null);
-  const [routePath, setRoutePath] = useState(null);
-  const [routeInfo, setRouteInfo] = useState(null);
+  const [destinationId, setDestinationId] = useState(null);
 
+  /**
+   * Check in with the venue code from the signage, not a session id.
+   *
+   * The code resolves against the live session list rather than being sent to the
+   * backend, because a venue code is a venue id and `GET /sessions` already reports
+   * which session is running on which venue. Falling back to attaching the typed value
+   * directly keeps a raw session id working for anyone reading one off the admin
+   * console.
+   */
   const join = async () => {
-    const id = entered.trim();
-    if (!id) { setJoinError("Enter the session ID shown on venue signage."); return; }
+    const code = normaliseCode(entered);
+    const invalid = codeError(code);
+    if (invalid) { setJoinError(invalid); return; }
+
+    setJoinError("");
+    const match = resolveSessionForCode(sessions, code);
+
     try {
-      setJoinError("");
-      await flow.attach(id);
+      if (match) {
+        await flow.attach(match.sessionId);
+        return;
+      }
+      // No live session on that code. The venue itself may still exist — it is stored on
+      // disk and outlives any run — so show the map without live crowd rather than
+      // telling someone standing in the building that their venue does not exist.
+      await flow.attachVenue(code);
     } catch (cause) {
-      setJoinError(cause.status === 404 ? `No session found with ID "${id}".` : cause.message);
+      setJoinError(
+        cause.status === 404
+          ? `No venue found with the code "${code}". Check the code on the signage at your entrance.`
+          : cause.message,
+      );
     }
   };
 
@@ -1952,26 +2150,18 @@ function WalkerApp({ session, navigate, signOut }) {
   }, [venue, atNodeId]);
 
   /**
-   * The way out, from the server's own Dijkstra over the venue graph — not a straight line.
-   * Re-asked whenever the attendee moves zone; the layout cannot change mid-session, so this
-   * does not need to follow the tick.
+   * The route, recomputed against live density.
+   *
+   * Client-side rather than `GET /venues/{id}/route`: the server's route is by distance
+   * only and cannot see the frame, so it happily routes through the jam. This runs the
+   * same graph with a congestion penalty — see src/crowdRouting.js — and it re-plans as
+   * the crowd moves, which is the entire point of showing an attendee a route at all.
    */
-  useEffect(() => {
-    if (!venue || !atNodeId) { setRoutePath(null); return; }
-    let cancelled = false;
-
-    api.getVenueRoute(venue.id, atNodeId)
-      .then((path) => {
-        if (cancelled) return;
-        setRouteInfo(path);
-        const byId = new Map(venue.halls.map((h) => [h.id, h]));
-        const points = (path.path ?? []).map((id) => byId.get(id)?.center).filter(Boolean);
-        setRoutePath(points.length >= 2 ? points : null);
-      })
-      .catch(() => { if (!cancelled) { setRoutePath(null); setRouteInfo(null); } });
-
-    return () => { cancelled = true; };
-  }, [venue, atNodeId]);
+  const route = useMemo(
+    () => planRoute(rawVenue, venue, atNodeId, frame,
+      destinationId ? { toNodeId: destinationId } : {}),
+    [rawVenue, venue, atNodeId, frame, destinationId],
+  );
 
   const here = venue?.halls.find((h) => h.id === atNodeId) ?? null;
 
@@ -1984,30 +2174,44 @@ function WalkerApp({ session, navigate, signOut }) {
               <span className="w-12 h-12 rounded-xl flex items-center justify-center mb-6" style={{ background: "rgba(77,141,240,0.16)" }}>
                 <MapPin className="w-6 h-6 cf-blue-hi" strokeWidth={2} />
               </span>
-              <h1 className="cf-display font-black uppercase text-3xl tracking-tight mb-2">Enter session ID</h1>
+              <h1 className="cf-display font-black uppercase text-3xl tracking-tight mb-2">Check in</h1>
               <p className="text-sm cf-dim leading-relaxed mb-7">
-                It's on signage at every entrance. The map loads live from the venue's own
-                simulation, so what you see is what the operators see.
+                Type the venue code from the signage at your entrance. The map loads live
+                from the venue's own simulation, so what you see is what the operators see.
               </p>
-              <input value={entered} onChange={(e) => setEntered(e.target.value.trim())}
+              <input value={entered} onChange={(e) => setEntered(normaliseCode(e.target.value))}
                 onKeyDown={(e) => e.key === "Enter" && join()}
-                placeholder="sess-1a2b3c4d"
-                aria-label="Session ID"
-                className="cf-input cf-focus w-full rounded-xl px-4 py-3.5 text-base cf-mono tracking-widest text-center mb-4" />
+                placeholder="WEMBLEY-01"
+                aria-label="Venue code"
+                autoCapitalize="characters" autoCorrect="off" spellCheck={false}
+                className="cf-input cf-focus w-full rounded-xl px-4 py-4 text-lg cf-display font-bold tracking-[0.3em] text-center mb-4" />
               {joinError && <p className="text-sm mb-4" style={{ color: "var(--cf-red)" }}>{joinError}</p>}
               <button onClick={join} disabled={flow.busy}
                 className="cf-focus cf-btn-primary rounded-xl px-5 py-3.5 cf-display font-bold uppercase text-sm tracking-wide w-full disabled:opacity-50">
-                {flow.busy ? "Loading…" : "Load my map"}
+                {flow.busy ? "Checking in…" : "Check in"}
               </button>
 
-              {sessions.length > 0 && (
+              {/* Known venues, by code. Live ones first and marked as such, but the stored
+                  ones are listed too — a venue between runs is still a venue you can look
+                  at, and hiding it makes a printed code look broken. */}
+              {knownVenues.length > 0 && (
                 <>
-                  <div className="cf-accent text-[10px] cf-dim2 mt-6 mb-2">RUNNING NOW</div>
+                  <div className="cf-accent text-[10px] cf-dim2 mt-6 mb-2">VENUES</div>
                   <div className="flex flex-wrap gap-2">
-                    {sessions.map((s) => (
-                      <button key={s.sessionId} onClick={() => setEntered(s.sessionId)}
-                        className="cf-focus cf-chip rounded-lg px-3 py-1.5 cf-mono text-[10px] cf-dim2">
-                        {s.sessionId}
+                    {knownVenues.map((v) => (
+                      <button key={v.code} onClick={() => setEntered(v.code)}
+                        className="cf-focus cf-chip rounded-lg px-3 py-2 text-left transition-colors hover:border-white/20">
+                        <span className="cf-display font-bold text-[11px] tracking-wider block">
+                          {v.code}
+                        </span>
+                        <span className="cf-mono text-[9px] flex items-center gap-1"
+                          style={{ color: v.live ? "var(--cf-green)" : "var(--cf-dim2)" }}>
+                          {v.live && (
+                            <span className="w-1.5 h-1.5 rounded-full cf-pulse"
+                              style={{ background: "var(--cf-green)" }} />
+                          )}
+                          {v.live ? "LIVE" : v.name}
+                        </span>
                       </button>
                     ))}
                   </div>
@@ -2027,30 +2231,36 @@ function WalkerApp({ session, navigate, signOut }) {
   const exits = venue.halls.filter((h) => h.type === "EXIT");
   // "You" is the centre of the zone you told us you are in — no invented precision.
   const me = here ? { x: here.center[0], y: here.center[1], accuracy: here.radius } : null;
-  const destinationName = routeInfo?.toNodeId ? zoneName(venue, routeInfo.toNodeId) : null;
 
   return (
     <PortalShell role="walker" session={session} navigate={navigate} signOut={signOut}>
-      <div className="grid lg:grid-cols-[1fr_19rem] gap-6">
+      <div className="grid lg:grid-cols-[1fr_20rem] gap-6">
         <div>
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
             <div>
               <div className="cf-display font-bold uppercase text-xl tracking-wide">{venue.name}</div>
-              <div className="cf-mono text-[11px] cf-dim2">{info?.sessionId}</div>
+              <div className="cf-mono text-[11px] cf-dim2">
+                CODE {normaliseCode(info?.venueId ?? venue.id)}
+              </div>
             </div>
             <div className="flex items-center gap-2">
               <ConnectionPill connected={connected} status={info?.status} />
-              <button onClick={() => { flow.leave(); setAtNodeId(null); setRoutePath(null); }}
+              <button onClick={() => { flow.leave(); setAtNodeId(null); setDestinationId(null); }}
                 className="cf-focus cf-btn-outline rounded-lg px-3.5 py-2 cf-accent text-[10px]">
                 CHANGE VENUE
               </button>
             </div>
           </div>
+
+          {/* The banner an attendee actually needs: is the way I am being sent clear? */}
+          <RouteBanner route={route} venue={venue} />
+
           {/* Density on, crowd dots off: an attendee should see that a zone is busy without
               being shown where every other individual is standing. */}
-          <VenueMap venue={venue} people={[]} me={me} route={routePath}
+          <VenueMap venue={venue} people={[]} me={me} trafficRoute={route}
             showDensity showPeople={false} height={520}
             onSelectHall={setAtNodeId} selectedHall={atNodeId} />
+
           <div className="cf-card rounded-xl px-5 py-4 mt-4 flex items-start gap-3">
             <MapPin className="w-4 h-4 cf-blue-hi shrink-0 mt-0.5" strokeWidth={2} />
             <p className="text-sm cf-dim leading-relaxed">
@@ -2074,38 +2284,44 @@ function WalkerApp({ session, navigate, signOut }) {
             <div className="cf-mono text-[11px] cf-dim2">ZONE-LEVEL · TAP THE MAP TO CHANGE</div>
           </div>
 
-          {destinationName && (
-            <div className="cf-card rounded-2xl p-5" style={{ borderColor: "rgba(77,141,240,.4)" }}>
-              <div className="cf-accent text-[10px] cf-dim2 mb-3">YOUR WAY OUT</div>
-              <div className="flex items-center gap-2 mb-2">
-                <Navigation className="w-4 h-4 cf-blue-hi shrink-0" strokeWidth={2} />
-                <span className="text-sm font-semibold">{destinationName}</span>
-              </div>
-              <div className="cf-mono text-[11px] cf-dim2">
-                {routeInfo.path.length - 1} zones · {routeInfo.cost} m
-              </div>
-            </div>
-          )}
+          {/* Turn-by-turn, coloured by what each leg is like to walk. */}
+          <RouteSteps route={route} venue={venue} />
 
           <div className="cf-card rounded-2xl p-5">
-            <div className="cf-accent text-[10px] cf-dim2 mb-3">EXITS</div>
-            <div className="flex flex-col gap-2">
+            <div className="flex items-center justify-between mb-3">
+              <span className="cf-accent text-[10px] cf-dim2">EXITS</span>
+              {destinationId && (
+                <button onClick={() => setDestinationId(null)}
+                  className="cf-focus cf-btn-ghost cf-mono text-[9px]">CLEAR</button>
+              )}
+            </div>
+            <div className="flex flex-col gap-1.5">
               {exits.map((h) => {
-                const busy = h.density > 0.7;
+                const band = trafficBand(h.density);
+                const chosen = destinationId === h.id
+                  || (!destinationId && route?.destination === h.id);
                 return (
-                  <div key={h.id} className="flex items-center justify-between gap-3 rounded-lg px-3 py-2.5">
+                  <button key={h.id}
+                    onClick={() => setDestinationId(h.id === destinationId ? null : h.id)}
+                    className="cf-focus flex items-center justify-between gap-3 rounded-lg px-3 py-2.5 text-left transition-colors"
+                    style={chosen
+                      ? { background: "rgba(255,255,255,0.05)", border: `1px solid ${band.color}` }
+                      : { border: "1px solid transparent" }}>
                     <span className="flex items-center gap-2.5 min-w-0">
-                      <LogOut className="w-3.5 h-3.5 shrink-0" style={{ color: busy ? "var(--cf-red)" : "var(--cf-green)" }} />
+                      <LogOut className="w-3.5 h-3.5 shrink-0" style={{ color: band.color }} />
                       <span className="text-sm truncate">{h.name}</span>
                     </span>
-                    <span className="cf-mono text-[10px] shrink-0" style={{ color: busy ? "var(--cf-red)" : "var(--cf-green)" }}>
-                      {busy ? "BUSY" : "CLEAR"}
+                    <span className="cf-mono text-[10px] shrink-0" style={{ color: band.color }}>
+                      {band.label}
                     </span>
-                  </div>
+                  </button>
                 );
               })}
               {!exits.length && <p className="text-sm cf-dim">This venue has no marked exit.</p>}
             </div>
+            {exits.length > 0 && (
+              <p className="cf-mono text-[9px] cf-dim2 mt-2.5">TAP AN EXIT TO ROUTE THERE</p>
+            )}
           </div>
 
           {venue.pois.length > 0 && (
@@ -2115,10 +2331,11 @@ function WalkerApp({ session, navigate, signOut }) {
                 {venue.pois.map((p) => {
                   const Icon = POI_ICON[p.kind] ?? MapPin;
                   return (
-                    <div key={p.id} className="flex items-center gap-2.5 rounded-lg px-3 py-2.5">
+                    <button key={p.id} onClick={() => setDestinationId(p.id.replace(/^poi-/, ""))}
+                      className="cf-focus flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-left hover:bg-white/5 transition-colors">
                       <Icon className="w-3.5 h-3.5 cf-blue-hi shrink-0" />
                       <span className="text-sm">{p.name}</span>
-                    </div>
+                    </button>
                   );
                 })}
               </div>
@@ -2132,6 +2349,104 @@ function WalkerApp({ session, navigate, signOut }) {
   );
 }
 
+/**
+ * The one-line verdict on the route an attendee is being shown.
+ *
+ * Sits above the map rather than in the sidebar because on a phone the sidebar is below
+ * the fold, and "the route you are about to walk runs through a crush" is not something
+ * to make anyone scroll for.
+ */
+export function RouteBanner({ route, venue }) {
+  const reduced = useReducedMotion();
+  if (!route) return null;
+
+  const destination = zoneName(venue, route.destination);
+  const minutes = Math.max(1, Math.round(route.etaSeconds / 60));
+
+  const tone = route.noClearRoute
+    ? { color: "var(--cf-red)", Icon: AlertTriangle,
+        title: "Every route out is congested right now",
+        body: `The clearest way to ${destination} still passes through heavy crowd. Move calmly and follow steward instructions.` }
+    : route.detoured
+      ? { color: "var(--cf-amber)", Icon: Navigation,
+          title: `Routed around the crowd to ${destination}`,
+          body: `${route.avoided ? `${zoneName(venue, route.avoided)} is congested, so this route goes around it. ` : ""}About ${route.detourCost}m further, and it keeps moving.` }
+      : { color: "var(--cf-blue-hi)", Icon: Navigation,
+          title: `Clear route to ${destination}`,
+          body: `${route.distance}m, roughly ${minutes} minute${minutes === 1 ? "" : "s"} at walking pace.` };
+
+  return (
+    <motion.div
+      key={`${route.destination}-${route.noClearRoute}-${route.detoured}`}
+      initial={reduced ? false : { opacity: 0, y: -8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
+      className="cf-card rounded-xl px-4 py-3.5 mb-4 flex items-start gap-3"
+      style={{ borderColor: `color-mix(in oklab, ${tone.color} 45%, transparent)` }}>
+      <tone.Icon className="w-4 h-4 shrink-0 mt-0.5" style={{ color: tone.color }} strokeWidth={2} />
+      <div className="min-w-0">
+        <div className="cf-display font-bold uppercase text-sm tracking-wide"
+          style={{ color: tone.color }}>{tone.title}</div>
+        <p className="text-sm cf-dim leading-relaxed mt-0.5">{tone.body}</p>
+      </div>
+    </motion.div>
+  );
+}
+
+/**
+ * Turn-by-turn legs, each carrying the colour of the zone it enters.
+ *
+ * Named zones rather than "in 40m turn left": the venue graph has no bearings, so a
+ * direction here would be invented. Zone names are what the signage says anyway.
+ */
+export function RouteSteps({ route, venue }) {
+  const reduced = useReducedMotion();
+  if (!route?.segments?.length) return null;
+
+  return (
+    <div className="cf-card rounded-2xl p-5">
+      <div className="flex items-center justify-between mb-4">
+        <span className="cf-accent text-[10px] cf-dim2">YOUR WAY OUT</span>
+        <span className="cf-mono text-[10px]" style={{ color: route.band.color }}>
+          {route.distance}m
+        </span>
+      </div>
+      <div className="flex flex-col">
+        {route.path.map((nodeId, i) => {
+          const segment = route.segments[i - 1];
+          const band = segment?.band;
+          const last = i === route.path.length - 1;
+          return (
+            <motion.div key={nodeId}
+              initial={reduced ? false : { opacity: 0, x: -6 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ duration: 0.3, delay: reduced ? 0 : i * 0.05 }}
+              className="flex gap-3">
+              <div className="flex flex-col items-center">
+                <span className="w-2.5 h-2.5 rounded-full shrink-0 mt-1.5"
+                  style={{
+                    background: i === 0 ? "var(--cf-blue-hi)" : last ? "var(--cf-violet)" : band?.color,
+                    boxShadow: i === 0 ? "0 0 0 3px rgba(77,141,240,.2)" : undefined,
+                  }} />
+                {!last && (
+                  <span className="w-0.5 flex-1 my-1 rounded-full"
+                    style={{ background: route.segments[i]?.band.color ?? "var(--cf-line)" }} />
+                )}
+              </div>
+              <div className={`min-w-0 ${last ? "" : "pb-3"}`}>
+                <div className="text-sm font-semibold truncate">{zoneName(venue, nodeId)}</div>
+                <div className="cf-mono text-[9px] cf-dim2">
+                  {i === 0 ? "YOU ARE HERE" : last ? "DESTINATION" : band?.label}
+                </div>
+              </div>
+            </motion.div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 /* ---- Client portal ---- */
 
 /**
@@ -2140,17 +2455,59 @@ function WalkerApp({ session, navigate, signOut }) {
  * The venue travels inline in POST /sessions, so there is no separate upload step — the file
  * you drop is the graph the simulation runs on.
  */
-function SessionSetup({ onCreate, busy, error }) {
-  const [venueJson, setVenueJson] = useState(sampleVenue);
-  const [fileName, setFileName] = useState("venue-layout-sample.json");
+function SessionSetup({ onCreate, busy, error, initialVenue = null, onNeedsTracing = null }) {
+  const [venueJson, setVenueJson] = useState(initialVenue ?? sampleVenue);
+  const [fileName, setFileName] = useState(
+    initialVenue ? `${initialVenue.name ?? "Traced venue"} (AI-traced)` : "venue-layout-sample.json",
+  );
   const [parseError, setParseError] = useState(null);
+
+  /**
+   * The venue code — what goes on the signage and what attendees type to check in.
+   *
+   * It becomes the venue's `id`, which is client-supplied on `POST /venues` and carried
+   * on every SessionInfo, so no new backend field is needed for this to work end to end.
+   */
+  const [code, setCode] = useState(() =>
+    normaliseCode(initialVenue?.id ?? "") || suggestCode(initialVenue?.name ?? sampleVenue.name));
+  const [codeTouched, setCodeTouched] = useState(false);
+
   const [settings, setSettings] = useState({
-    crowdSize: 2500, arrivalRate: 25, maxTicks: 1200, rerouteEnabled: true,
+    // 6000 ticks ≈ 10 minutes of wall clock: the backend runs one tick every 100ms.
+    //
+    // The old 1200 ended a run after two minutes, and because a finished session stops
+    // broadcasting, the map simply froze — which reads as "the live simulation is
+    // broken" rather than "the run you asked for is over". Ten minutes outlasts any
+    // demo; STOP is there when it should end sooner.
+    crowdSize: 2500, arrivalRate: 25, maxTicks: 6000, rerouteEnabled: true,
   });
   const fileRef = useRef(null);
 
+  // A traced layout arriving from Layout Studio replaces whatever was loaded, and
+  // re-suggests a code from its name — unless the operator has already typed one, which
+  // is theirs to keep.
+  useEffect(() => {
+    if (!initialVenue) return;
+    setVenueJson(initialVenue);
+    setFileName(`${initialVenue.name ?? "Traced venue"} (AI-traced)`);
+    setParseError(null);
+    if (!codeTouched) setCode(suggestCode(initialVenue.name));
+  }, [initialVenue]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const codeIssue = codeError(code);
+
   const readVenue = (file) => {
     if (!file) return;
+
+    // An image is a floor plan, not a graph. It has to go through the tracer, which
+    // lives on the AI layout tab — so hand it over rather than failing with a JSON
+    // parse error that tells the operator nothing about what to do next.
+    if (file.type.startsWith("image/")) {
+      setParseError(null);
+      onNeedsTracing?.(file);
+      return;
+    }
+
     const reader = new FileReader();
     reader.onload = () => {
       try {
@@ -2161,11 +2518,18 @@ function SessionSetup({ onCreate, busy, error }) {
         setVenueJson(parsed);
         setFileName(file.name);
         setParseError(null);
+        if (!codeTouched) setCode(suggestCode(parsed.name));
       } catch (cause) {
         setParseError(`${file.name} is not a usable venue layout — ${cause.message}`);
       }
     };
     reader.readAsText(file);
+  };
+
+  /** Stamps the code onto the venue as its id, then opens the session on it. */
+  const create = () => {
+    if (codeIssue) return;
+    onCreate({ ...venueJson, id: normaliseCode(code) }, settings);
   };
 
   const field = (label, key, min, max) => (
@@ -2183,8 +2547,8 @@ function SessionSetup({ onCreate, busy, error }) {
       <div>
         <div className="cf-display font-bold uppercase text-lg tracking-wide mb-2">Venue layout</div>
         <p className="text-sm cf-dim leading-relaxed mb-5">
-          A JSON graph of zones and the walkways between them. The sample arena is loaded and
-          ready — drop your own to replace it.
+          Drop a picture of your floor plan and it gets traced into a map. The sample arena
+          is loaded and ready if you just want to see a crowd run.
         </p>
 
         <div
@@ -2198,10 +2562,43 @@ function SessionSetup({ onCreate, busy, error }) {
           <p className="text-xs cf-dim2">
             {venueJson.nodes.length} zones · {venueJson.edges.length} walkways · click to replace
           </p>
-          <input ref={fileRef} type="file" accept="application/json,.json" className="hidden"
+          {/* Images first in the accept list, because a floor plan is what most people
+              arrive with. A venue JSON is still accepted — it is what the tracer
+              produces, so a layout traced once can be reused without re-tracing it. */}
+          <input ref={fileRef} type="file"
+            accept="image/png,image/jpeg,image/webp,application/json,.json"
+            className="hidden"
             onChange={(e) => readVenue(e.target.files?.[0])} />
         </div>
+        <p className="text-xs cf-dim2 mt-2.5">
+          PNG, JPG or WEBP floor plan — or a venue JSON you traced earlier.
+        </p>
         {parseError && <p className="text-sm mt-3" style={{ color: "var(--cf-red)" }}>{parseError}</p>}
+
+        {/* The venue code. Deliberately on the layout side of the form rather than with
+            the crowd settings: it identifies the building, and it outlives any one run. */}
+        <div className="mt-6">
+          <div className="cf-display font-bold uppercase text-lg tracking-wide mb-2">Venue code</div>
+          <p className="text-sm cf-dim leading-relaxed mb-4">
+            Put this on your entrance signage. Attendees type it to check in and see the
+            live map of your venue — it stays the same across every session you run here.
+          </p>
+          <input
+            value={code}
+            onChange={(e) => { setCode(normaliseCode(e.target.value)); setCodeTouched(true); }}
+            aria-label="Venue code"
+            aria-invalid={!!codeIssue}
+            autoCapitalize="characters" autoCorrect="off" spellCheck={false}
+            placeholder="WEMBLEY-01"
+            className="cf-input cf-focus w-full rounded-xl px-4 py-4 text-lg cf-display font-bold tracking-[0.3em] text-center" />
+          {codeIssue
+            ? <p className="text-sm mt-2" style={{ color: "var(--cf-red)" }}>{codeIssue}</p>
+            : (
+              <p className="cf-mono text-[10px] cf-dim2 mt-2">
+                ATTENDEES CHECK IN WITH <span style={{ color: "var(--cf-orange)" }}>{normaliseCode(code)}</span>
+              </p>
+            )}
+        </div>
       </div>
 
       <div>
@@ -2213,7 +2610,12 @@ function SessionSetup({ onCreate, busy, error }) {
         <div className="grid grid-cols-2 gap-4 mb-5">
           {field("CROWD SIZE", "crowdSize", 1, 10000)}
           {field("ARRIVALS / TICK", "arrivalRate", 1, 2000)}
-          {field("MAX TICKS", "maxTicks", 1, 20000)}
+          {field(
+            // Ticks are the backend's unit but minutes are what an operator is
+            // deciding, so show both rather than making them do the arithmetic.
+            `RUN LENGTH · ~${Math.max(1, Math.round(settings.maxTicks / 600))} MIN`,
+            "maxTicks", 1, 60000,
+          )}
           <label className="flex flex-col gap-1.5">
             <span className="cf-accent text-[10px] cf-dim2">REROUTING</span>
             <button
@@ -2227,7 +2629,7 @@ function SessionSetup({ onCreate, busy, error }) {
         </div>
 
         <button
-          onClick={() => onCreate(venueJson, settings)} disabled={busy}
+          onClick={create} disabled={busy || !!codeIssue}
           className="cf-focus cf-btn-primary rounded-xl px-5 py-3.5 cf-display font-bold uppercase text-sm tracking-wide w-full disabled:opacity-50">
           {busy ? "Creating…" : "Create session"}
         </button>
@@ -2248,9 +2650,36 @@ function SessionControls({ info, busy, onStart, onPause, onStop, connected }) {
         <ConnectionPill connected={connected} status={status} />
       </div>
       <div className="cf-mono text-[11px] cf-dim2 mb-1">{info?.sessionId}</div>
-      <div className="cf-mono text-sm mb-4">
+      <div className="cf-mono text-sm mb-2">
         TICK {info?.tick ?? 0} / {info?.maxTicks ?? 0}
       </div>
+
+      {/* Progress, because "TICK 1180 / 1200" does not read as "about to end".
+          A run that finishes stops broadcasting and the map stops moving, so the one
+          thing this panel has to convey is how much time is left. */}
+      <div className="mb-4">
+        <DensityBar height={3}
+          density={(info?.tick ?? 0) / Math.max(1, info?.maxTicks ?? 1)}
+          color={terminal ? "var(--cf-dim2)" : "var(--cf-blue-hi)"} />
+      </div>
+
+      {/* A finished run is the single most confusing state in the app: everything
+          simply stops, with nothing on screen saying why. Say it plainly, and offer
+          the way forward rather than leaving three disabled buttons. */}
+      {terminal && (
+        <div className="rounded-lg px-3 py-2.5 mb-3"
+          style={{ background: "rgba(77,141,240,0.1)", border: "1px solid rgba(77,141,240,0.3)" }}>
+          <div className="cf-mono text-[10px] mb-1" style={{ color: "var(--cf-blue-hi)" }}>
+            {status === "COMPLETED" ? "RUN FINISHED" : "RUN STOPPED"}
+          </div>
+          <p className="text-xs cf-dim leading-relaxed">
+            {status === "COMPLETED"
+              ? `Reached tick ${info?.maxTicks ?? 0}, so the crowd has stopped moving. Start a new session to run again — raise MAX TICKS for a longer run.`
+              : "You stopped this run. Start a new session to run again."}
+          </p>
+        </div>
+      )}
+
       <div className="grid grid-cols-3 gap-2">
         <button onClick={onStart} disabled={busy || terminal || status === "RUNNING"}
           className="cf-focus cf-btn-primary rounded-lg px-3 py-2.5 cf-accent text-[10px] disabled:opacity-40">START</button>
@@ -2263,38 +2692,129 @@ function SessionControls({ info, busy, onStart, onPause, onStop, connected }) {
   );
 }
 
+/**
+ * The operator's safety panel: which zones are dangerous, and what to do about each.
+ *
+ * Distinct from the admin Incidents feed, which is a *log* — every alert the backend has
+ * raised, newest first, including ones that have since resolved. This is the opposite: a
+ * live picture of what is wrong right now, ranked, with the one at the top being the one
+ * to act on. A log is for the review afterwards; this is for the next thirty seconds.
+ *
+ * Capped at four. An operator scanning a phone during an incident reads the top of a
+ * list, not the bottom, and a panel that lists every zone above 50% buries the crush
+ * under the queues.
+ */
+export function HazardAlerts({ hazards }) {
+  const reduced = useReducedMotion();
+  const top = (hazards ?? []).slice(0, 4);
+
+  const critical = top.filter((h) => hazardWarning(h).severity === "CRITICAL").length;
+
+  return (
+    <div className="cf-card rounded-2xl p-5"
+      style={critical ? { borderColor: "rgba(225,6,0,.5)" } : {}}>
+      <div className="flex items-center justify-between mb-4">
+        <span className="flex items-center gap-2">
+          <AlertTriangle className={`w-3.5 h-3.5 ${critical ? "cf-red cf-pulse" : "cf-dim2"}`} strokeWidth={2} />
+          <span className={`cf-accent text-[10px] ${critical ? "cf-red" : "cf-dim2"}`}>
+            CROWD SAFETY
+          </span>
+        </span>
+        {critical > 0 && (
+          <span className="cf-mono text-[9px] px-2 py-0.5 rounded"
+            style={{ background: "rgba(225,6,0,.16)", color: "var(--cf-red)" }}>
+            {critical} CRITICAL
+          </span>
+        )}
+      </div>
+
+      <AnimatePresence initial={false}>
+        {top.map((hazard) => {
+          const warning = hazardWarning(hazard);
+          const colour = warning.severity === "CRITICAL" ? "var(--cf-red)"
+            : warning.severity === "WARNING" ? "var(--cf-amber)" : "var(--cf-dim)";
+          return (
+            <motion.div key={hazard.hall.id}
+              layout={!reduced}
+              initial={reduced ? false : { opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: "auto" }}
+              exit={reduced ? { opacity: 0 } : { opacity: 0, height: 0 }}
+              transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
+              className="overflow-hidden">
+              <div className="flex gap-2.5 pb-3.5 mb-3.5 border-b cf-hairline last:border-b-0">
+                <span className="w-1 rounded-full shrink-0" style={{ background: colour }} />
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="cf-mono text-[9px]" style={{ color: colour }}>
+                      {warning.severity}
+                    </span>
+                    <span className="cf-mono text-[9px] cf-dim2">
+                      {Math.round(hazard.density * 100)}%
+                      {hazard.rising && " ↑"}
+                    </span>
+                  </div>
+                  <div className="text-sm font-semibold leading-snug">{warning.title}</div>
+                  <p className="text-xs cf-dim leading-relaxed mt-1">{warning.body}</p>
+                </div>
+              </div>
+            </motion.div>
+          );
+        })}
+      </AnimatePresence>
+
+      {!top.length && (
+        <p className="text-sm cf-dim leading-relaxed">
+          Every zone is below the warning line. Alerts appear here the moment one starts
+          filling faster than it can clear.
+        </p>
+      )}
+    </div>
+  );
+}
+
 function ClientApp({ session, navigate, signOut }) {
   const [tab, setTab] = useState("Live");
-  const [upload, setUpload] = useState(null);
-  const [traced, setTraced] = useState(false);
-  const [dragOver, setDragOver] = useState(false);
-  const fileRef = useRef(null);
+  /** A venue graph the AI traced out of a floor plan, waiting to be turned into a run. */
+  const [tracedVenue, setTracedVenue] = useState(null);
+
+  /** A floor plan dropped on the Live tab, handed to Layout Studio to trace. */
+  const [planToTrace, setPlanToTrace] = useState(null);
 
   const flow = useCrowdFlow();
-  const { venue, people, info, metrics, advisory, aiStatus, reroutePath, connected, busy, error } = flow;
+  const { venue, people, frame, info, metrics, advisory, aiStatus, reroutePath, connected, busy, error } = flow;
 
-  const handleFile = (file) => {
-    if (!file || !file.type.startsWith("image/")) return;
-    const reader = new FileReader();
-    reader.onload = () => { setUpload(reader.result); setTraced(false); };
-    reader.readAsDataURL(file);
-  };
+  /** Zones worth an operator's attention, worst first. Recomputed per frame. */
+  const hazards = useMemo(
+    () => rankHazards(venue?.halls, frame?.predictedRisk),
+    [venue?.halls, frame?.predictedRisk],
+  );
 
   return (
     <PortalShell role="client" session={session} navigate={navigate} signOut={signOut}
-      tabs={["Live", "Floor plans", "Halls"]} active={tab} setActive={setTab}>
+      tabs={["Live", "AI layout"]} active={tab} setActive={setTab}>
 
       {tab === "Live" && !venue && (
-        <SessionSetup onCreate={flow.create} busy={busy} error={error} />
+        <SessionSetup onCreate={flow.create} busy={busy} error={error}
+          initialVenue={tracedVenue}
+          onNeedsTracing={(file) => { setPlanToTrace(file); setTab("AI layout"); }} />
       )}
 
       {tab === "Live" && venue && (
         <div className="grid lg:grid-cols-[1fr_19rem] gap-6">
           <div>
-            <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
               <div>
                 <div className="cf-display font-bold uppercase text-xl tracking-wide">{venue.name}</div>
-                <div className="cf-mono text-[11px] cf-dim2">{venue.id}</div>
+                {/* The code, given the prominence it needs: this is the string that has
+                    to end up on the signage, and an operator should be able to read it
+                    off this screen without hunting. */}
+                <div className="flex items-center gap-2 mt-1">
+                  <span className="cf-accent text-[9px] cf-dim2">CHECK-IN CODE</span>
+                  <span className="cf-display font-bold text-sm tracking-[0.25em] px-2 py-0.5 rounded"
+                    style={{ background: "rgba(255,106,0,0.14)", color: "var(--cf-orange)" }}>
+                    {normaliseCode(info?.venueId ?? venue.id)}
+                  </span>
+                </div>
               </div>
               <button onClick={flow.leave} className="cf-focus cf-btn-outline rounded-lg px-3.5 py-2 cf-accent text-[10px]">
                 NEW SESSION
@@ -2314,7 +2834,7 @@ function ClientApp({ session, navigate, signOut }) {
               // agree, so agents legitimately placed by the simulation still landed on drawn
               // void. Here the zones and corridors on screen *are* the walkable mask, so a
               // figure outside them is impossible rather than merely unlikely.
-              underlay={traced ? upload : null} underlayOpacity={0.25} />
+              />
             <p className="cf-mono text-[10px] cf-dim2 mt-2">
               {(metrics?.peopleInside ?? 0).toLocaleString()} inside · drawn as crowd figures,
               positions sampled server-side
@@ -2326,20 +2846,22 @@ function ClientApp({ session, navigate, signOut }) {
             <SessionControls info={info} busy={busy} connected={connected}
               onStart={flow.start} onPause={flow.pause} onStop={flow.stop} />
 
+            {/* Safety warnings, above the metrics: an operator scanning this column needs
+                "the north concourse is about to become dangerous" before they need a
+                headcount. */}
+            <HazardAlerts hazards={hazards} />
+
             <div className="cf-card rounded-2xl p-5">
               <div className="cf-accent text-[10px] cf-dim2 mb-4">INSIDE NOW</div>
-              <div className="cf-display font-black text-4xl mb-1">
-                {(metrics?.peopleInside ?? 0).toLocaleString()}
+              <div className="cf-display font-black text-4xl mb-1 tabular-nums">
+                <CountUp value={metrics?.peopleInside ?? 0} />
               </div>
               <div className="cf-mono text-[11px] cf-dim2 mb-4">
                 OF {venue.capacity.toLocaleString()} CAPACITY · {metrics?.exited ?? 0} LEFT
               </div>
-              <div className="h-2 rounded-full bg-white/5 overflow-hidden">
-                <div className="h-full rounded-full" style={{
-                  width: `${Math.min(100, ((metrics?.peopleInside ?? 0) / Math.max(1, venue.capacity)) * 100)}%`,
-                  background: "linear-gradient(90deg, var(--cf-orange), var(--cf-red))",
-                }} />
-              </div>
+              <DensityBar height={8}
+                density={(metrics?.peopleInside ?? 0) / Math.max(1, venue.capacity)}
+                color="linear-gradient(90deg, var(--cf-orange), var(--cf-red))" />
               <div className="grid grid-cols-2 gap-3 mt-4 pt-4 border-t cf-hairline">
                 <div>
                   <div className="text-[10px] cf-mono cf-dim2 mb-0.5">PEAK DENSITY</div>
@@ -2359,11 +2881,11 @@ function ClientApp({ session, navigate, signOut }) {
                   <div key={h.id}>
                     <div className="flex items-center justify-between mb-1.5">
                       <span className="text-sm truncate pr-2">{h.name}</span>
-                      <span className="cf-mono text-[11px] shrink-0" style={{ color: densityColor(h.density) }}>{Math.round(h.density * 100)}%</span>
+                      <span className="cf-mono text-[11px] shrink-0 tabular-nums" style={{ color: densityColor(h.density) }}>
+                        <CountUp value={(h.density ?? 0) * 100} format={(n) => `${Math.round(n)}%`} />
+                      </span>
                     </div>
-                    <div className="h-1 rounded-full bg-white/5 overflow-hidden">
-                      <div className="h-full rounded-full" style={{ width: `${Math.min(100, h.density * 100)}%`, background: densityColor(h.density) }} />
-                    </div>
+                    <DensityBar density={h.density} color={densityColor(h.density)} />
                   </div>
                 ))}
               </div>
@@ -2385,114 +2907,48 @@ function ClientApp({ session, navigate, signOut }) {
         </div>
       )}
 
-      {tab === "Floor plans" && (
-        <div className="grid lg:grid-cols-2 gap-6">
-          <div>
-            <div className="cf-display font-bold uppercase text-lg tracking-wide mb-2">Upload your floor plan</div>
-            <p className="text-sm cf-dim leading-relaxed mb-5">
-              Any flat 2D image works — a PDF export, a photo of a printed plan, an architect's PNG.
-              It becomes the underlay your zones are traced onto.
-            </p>
-
-            <div
-              onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-              onDragLeave={() => setDragOver(false)}
-              onDrop={(e) => { e.preventDefault(); setDragOver(false); handleFile(e.dataTransfer.files?.[0]); }}
-              onClick={() => fileRef.current?.click()}
-              className="cf-focus rounded-2xl border-2 border-dashed flex flex-col items-center justify-center text-center px-6 py-14 cursor-pointer transition-all"
-              style={{ borderColor: dragOver ? "var(--cf-orange)" : "var(--cf-line2)", background: dragOver ? "rgba(255,106,0,0.06)" : "transparent" }}>
-              <Upload className="w-7 h-7 cf-dim2 mb-4" strokeWidth={1.6} />
-              <div className="cf-display font-bold uppercase text-sm tracking-wide mb-1.5">
-                {upload ? "Replace floor plan" : "Drop an image or click to browse"}
+      {/* AI tracing. Its own tab rather than a step inside session setup, because a plan
+          is traced once for a building and then reused for every run on it. */}
+      {tab === "AI layout" && (
+        <div>
+          <div className="cf-card rounded-2xl p-6 mb-6 flex items-start gap-4">
+            <span className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0"
+              style={{ background: "rgba(255,106,0,0.16)" }}>
+              <Cpu className="w-5 h-5 cf-orange" strokeWidth={2} />
+            </span>
+            <div className="min-w-0">
+              <div className="cf-display font-bold uppercase text-base tracking-wide mb-1.5">
+                Turn a floor plan into a walkable map
               </div>
-              <p className="text-xs cf-dim2">PNG, JPG or WEBP · processed in your browser, never uploaded</p>
-              <input ref={fileRef} type="file" accept="image/*" className="hidden"
-                onChange={(e) => handleFile(e.target.files?.[0])} />
+              <p className="text-sm cf-dim leading-relaxed">
+                Upload a 2D plan of your venue and a vision model reads it — halls, gates,
+                exits — while computer vision traces the walkable space into the pathways
+                the simulation actually routes people along. Check what it found, fix
+                anything it got wrong, then run a session on it.
+              </p>
+              {tracedVenue && (
+                <div className="flex flex-wrap items-center gap-3 mt-4">
+                  <span className="cf-mono text-[11px] cf-green flex items-center gap-1.5">
+                    <Check className="w-3.5 h-3.5" strokeWidth={2.5} />
+                    {tracedVenue.nodes?.length ?? 0} zones · {tracedVenue.edges?.length ?? 0} pathways ready
+                  </span>
+                  <button onClick={() => { flow.leave(); setTab("Live"); }}
+                    className="cf-focus cf-btn-primary rounded-lg px-4 py-2 cf-accent text-[10px]">
+                    USE IT FOR A SESSION
+                  </button>
+                </div>
+              )}
             </div>
-
-            {upload && (
-              <div className="mt-5 flex flex-col gap-4">
-                <div className="rounded-xl overflow-hidden border cf-hairline">
-                  <img src={upload} alt="Uploaded floor plan preview" className="w-full max-h-64 object-contain" style={{ background: "#070B12" }} />
-                </div>
-                <div className="flex gap-2">
-                  <button onClick={() => setTraced(true)} disabled={traced}
-                    className="cf-focus cf-btn-primary rounded-xl px-5 py-3 cf-display font-bold uppercase text-sm tracking-wide flex-1 disabled:opacity-50">
-                    {traced ? "Traced ✓" : "Trace into map"}
-                  </button>
-                  <button onClick={() => { setUpload(null); setTraced(false); }} aria-label="Remove floor plan"
-                    className="cf-focus cf-btn-outline rounded-xl px-4 flex items-center justify-center">
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-            )}
           </div>
 
-          <div>
-            <div className="cf-display font-bold uppercase text-lg tracking-wide mb-2">Generated map</div>
-            <p className="text-sm cf-dim leading-relaxed mb-5">
-              Zones, corridors and gates laid over your plan. Drag to pan, pinch or use the controls to zoom.
-            </p>
-            {venue ? (
-              <>
-                <VenueMap venue={venue} people={[]} me={null} height={420} underlay={traced ? upload : null} underlayOpacity={0.35} showPeople={false} />
-                {!upload && (
-                  <p className="text-xs cf-dim2 mt-3 leading-relaxed">
-                    Showing the layout from the live session. Upload a plan to see it underlaid here.
-                  </p>
-                )}
-              </>
-            ) : (
-              <div className="cf-card rounded-2xl px-6 py-14 text-center">
-                <p className="text-sm cf-dim">Create a session on the Live tab to see its layout here.</p>
-              </div>
-            )}
-          </div>
+          {/* Confirmed graphs land here. LayoutStudio only fires this once the *server*
+              has re-validated the operator's edits, so a graph reaching this callback has
+              already been checked for a gate that cannot reach an exit. */}
+          <LayoutStudio initialFile={planToTrace}
+            onConfirmed={(v) => { setTracedVenue(v); }} />
         </div>
       )}
 
-      {tab === "Halls" && !venue && (
-        <div className="cf-card rounded-2xl px-6 py-14 text-center">
-          <p className="text-sm cf-dim">Create a session on the Live tab to list its zones.</p>
-        </div>
-      )}
-
-      {tab === "Halls" && venue && (
-        <div className="cf-card rounded-2xl overflow-hidden">
-          <div className="hidden sm:grid grid-cols-[1fr_8rem_8rem_10rem] gap-4 px-6 py-3 border-b cf-hairline cf-accent text-[11px] cf-dim2">
-            <span>HALL</span><span>TYPE</span><span>OCCUPANCY</span><span>STATUS</span>
-          </div>
-          {venue.halls.map((h) => {
-            const Icon = ZONE_ICON[h.type] ?? Armchair;
-            return (
-              <div key={h.id} className="grid sm:grid-cols-[1fr_8rem_8rem_10rem] gap-4 items-center px-6 py-4 border-b cf-hairline last:border-b-0 hover:bg-white/[0.02] transition-colors">
-                <div className="flex items-center gap-3">
-                  <span className="w-9 h-9 rounded-lg cf-chip flex items-center justify-center shrink-0"><Icon className="w-4 h-4" /></span>
-                  <div className="min-w-0">
-                    <div className="font-semibold text-sm truncate">{h.name}</div>
-                    <div className="cf-mono text-[10px] cf-dim2">
-                      {h.occupancy ?? 0} / {h.capacity}
-                    </div>
-                  </div>
-                </div>
-                <span className="cf-mono text-xs cf-dim2">{h.type}</span>
-                <div className="flex items-center gap-2">
-                  <div className="flex-1 h-1.5 rounded-full bg-white/5 overflow-hidden">
-                    <div className="h-full rounded-full" style={{ width: `${Math.min(100, h.density * 100)}%`, background: densityColor(h.density) }} />
-                  </div>
-                  <span className="cf-mono text-xs">{Math.round(h.density * 100)}%</span>
-                </div>
-                {/* The server has already banded this; showing its label rather than
-                    re-deriving one keeps the table agreeing with the map and the alert feed. */}
-                <span className="cf-mono text-[11px]" style={{ color: (STATUS_META[h.status] ?? STATUS_META.OK).c }}>
-                  {(STATUS_META[h.status] ?? STATUS_META.OK).l}
-                </span>
-              </div>
-            );
-          })}
-        </div>
-      )}
     </PortalShell>
   );
 }
@@ -2533,6 +2989,7 @@ function useSessionList(intervalMs = 4000) {
 
 function AdminApp({ session, navigate, signOut }) {
   const [tab, setTab] = useState("Overview");
+  const reduced = useReducedMotion();
   const { sessions, error: listError } = useSessionList();
   const flow = useCrowdFlow();
   const { venue, people, frame, alerts, connected, info } = flow;
@@ -2563,15 +3020,19 @@ function AdminApp({ session, navigate, signOut }) {
         <>
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
             {[
-              { v: totals.venues, l: "ACTIVE VENUES" },
-              { v: totals.inside.toLocaleString(), l: "PEOPLE INSIDE" },
-              { v: totals.critical, l: "ZONES CRITICAL", c: totals.critical ? "var(--cf-red)" : undefined },
-              { v: totals.peakRisk.toFixed(2), l: "PEAK PREDICTED RISK", c: "var(--cf-orange)" },
-            ].map((s) => (
-              <div key={s.l} className="cf-card rounded-2xl p-6">
-                <div className="cf-display font-black text-3xl mb-1" style={{ color: s.c || "var(--cf-ink)" }}>{s.v}</div>
+              { v: totals.venues, l: "ACTIVE VENUES", f: (n) => Math.round(n) },
+              { v: totals.inside, l: "PEOPLE INSIDE" },
+              { v: totals.critical, l: "ZONES CRITICAL", c: totals.critical ? "var(--cf-red)" : undefined, f: (n) => Math.round(n) },
+              { v: totals.peakRisk, l: "PEAK PREDICTED RISK", c: "var(--cf-orange)", f: (n) => n.toFixed(2) },
+            ].map((s, i) => (
+              <motion.div key={s.l} className="cf-card rounded-2xl p-6"
+                initial={reduced ? false : { opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: reduced ? 0 : 0.4, delay: reduced ? 0 : i * 0.06, ease: [0.16, 1, 0.3, 1] }}>
+                <div className="cf-display font-black text-3xl mb-1 tabular-nums" style={{ color: s.c || "var(--cf-ink)" }}>
+                  <CountUp value={s.v} format={s.f} />
+                </div>
                 <div className="cf-accent text-[10px] cf-dim2">{s.l}</div>
-              </div>
+              </motion.div>
             ))}
           </div>
           <div className="mb-4"><ErrorNote error={listError ?? flow.error} /></div>
@@ -2606,19 +3067,28 @@ function AdminApp({ session, navigate, signOut }) {
                 <span className="cf-accent text-[10px] cf-dim2">LIVE FEED</span>
               </div>
               <div className="flex flex-col gap-4">
-                {incidents.map((inc) => (
-                  <div key={inc.id} className="flex gap-3">
-                    <span className="w-1.5 h-1.5 rounded-full shrink-0 mt-1.5"
-                      style={{ background: (STATUS_META[inc.severity] ?? STATUS_META.OK).c }} />
-                    <div className="min-w-0">
-                      <div className="cf-mono text-[10px] cf-dim2 mb-0.5">
-                        TICK {inc.tick} · {Math.round(inc.density * 100)}%
+                {/* `popLayout` so an arriving alert slides the rest down rather than
+                    shoving them — on a feed that updates mid-incident, a list that jumps
+                    is a list an operator loses their place in. */}
+                <AnimatePresence initial={false} mode="popLayout">
+                  {incidents.map((inc) => (
+                    <motion.div key={inc.id} layout className="flex gap-3"
+                      initial={{ opacity: 0, x: -12 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      exit={{ opacity: 0 }}
+                      transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}>
+                      <span className="w-1.5 h-1.5 rounded-full shrink-0 mt-1.5"
+                        style={{ background: (STATUS_META[inc.severity] ?? STATUS_META.OK).c }} />
+                      <div className="min-w-0">
+                        <div className="cf-mono text-[10px] cf-dim2 mb-0.5">
+                          TICK {inc.tick} · {Math.round(inc.density * 100)}%
+                        </div>
+                        <div className="text-sm leading-snug">{zoneName(venue, inc.nodeId)}</div>
+                        <div className="text-xs cf-dim leading-snug mt-0.5">{inc.message}</div>
                       </div>
-                      <div className="text-sm leading-snug">{zoneName(venue, inc.nodeId)}</div>
-                      <div className="text-xs cf-dim leading-snug mt-0.5">{inc.message}</div>
-                    </div>
-                  </div>
-                ))}
+                    </motion.div>
+                  ))}
+                </AnimatePresence>
                 {!incidents.length && (
                   <p className="text-sm cf-dim">Nothing raised yet. Alerts appear as zones cross the warning line.</p>
                 )}
@@ -2748,6 +3218,7 @@ function Footer({ navigate }) {
 export default function CrowdFlowApp() {
   const [route, navigate] = useHashRoute();
   const [session, setSession] = useState(null);
+  const reduced = useReducedMotion();
 
   useEffect(() => {
     if (typeof window !== "undefined") window.scrollTo(0, 0);
@@ -2790,7 +3261,18 @@ export default function CrowdFlowApp() {
       <MeshField />
       <div className="relative" style={{ zIndex: 2 }}>
         <Header route={route} navigate={navigate} session={session} signOut={signOut} />
-        <main key={route}>{page}</main>
+        {/* `mode="wait"` so the outgoing page finishes leaving before the next arrives.
+            Cross-fading them instead put two full-height pages in the layout at once and
+            the footer jumped as they swapped. */}
+        <AnimatePresence mode="wait" initial={false}>
+          <motion.main key={route}
+            initial={reduced ? false : { opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={reduced ? { opacity: 0 } : { opacity: 0, y: -6 }}
+            transition={{ duration: reduced ? 0 : 0.28, ease: [0.16, 1, 0.3, 1] }}>
+            {page}
+          </motion.main>
+        </AnimatePresence>
         {!isPortal && <Footer navigate={navigate} />}
       </div>
     </div>
