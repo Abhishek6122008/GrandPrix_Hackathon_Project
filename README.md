@@ -19,12 +19,12 @@ an estimate.
 
 | Path | What it is |
 |---|---|
-| [`backend/`](backend/) | Spring Boot. Sessions, the agent simulation, density detection, rerouting, WebSocket broadcast. Port **8080**. |
+| [`backend/`](backend/) | Spring Boot. Accounts, sessions, the agent simulation, density detection, rerouting, WebSocket broadcast. Port **8080**. |
 | [`ai-service/`](ai-service/) | Python FastAPI. Per-zone risk prediction and the operator advisory. Port **8000**. |
 | [`frontend/`](frontend/) | React + Vite. Three portals over one live map. Port **5173**. |
 | [`ml/`](ml/) | Model training and export to the Hugging Face Hub. Not needed to run the app. |
 | [`sample-data/`](sample-data/) | A ready-made venue layout and event schedule. |
-| [`docs/`](docs/) | API contract, system design, demo script. |
+| [`docs/`](docs/) | API contract, system design, auth and database, demo script. |
 
 ---
 
@@ -60,7 +60,19 @@ cd backend
 ./mvnw spring-boot:run
 ```
 
-Needs JDK 21.
+Needs JDK 21 or newer. **No database to install.** Accounts are written to an H2 file under
+`backend/data/`, created on first boot, with Flyway owning the schema. A deployment swaps in
+Postgres via `SPRING_PROFILES_ACTIVE=cloud` and no code change.
+
+Optional, and only if you want the extras:
+
+```bash
+cp secrets.example.yml secrets.yml   # then fill in
+```
+
+That seeds an allowlisted admin account and lets password-reset codes go out by email. Without
+it the app still boots — the admin is simply not seeded, and reset codes come back in the HTTP
+response instead of an inbox. Details in [`docs/auth-and-database.md`](docs/auth-and-database.md).
 
 ### 3. Frontend (port 5173)
 
@@ -70,8 +82,14 @@ npm install
 npm run dev
 ```
 
-Then open <http://localhost:5173>, go to **Access → Client**, sign in with anything, and press
-**Create session**. The sample arena is pre-loaded, so it is one click to a running crowd.
+Then open <http://localhost:5173>, go to **Access → Client**, and register an account — 8 to 72
+characters with at least one letter and one number. Press **Create session**: the sample arena is
+pre-loaded, so it is one click from there to a running crowd.
+
+Accounts are real. Registration writes a row, sign-in returns a JWT the frontend keeps in
+`localStorage`, and `POST /sessions` refuses anything without a `CLIENT` or `ADMIN` token.
+Walker and client are self-service; the admin console is allowlisted and cannot be requested at
+the form. See [`docs/auth-and-database.md`](docs/auth-and-database.md).
 
 ---
 
@@ -250,6 +268,16 @@ All three read the same live session; they differ in what they are allowed to se
   the zones that are becoming dangerous with what to do about each.
 - **Admin** — every session on the backend, aggregate figures, and the alert feed.
 
+Walker and client are **the same account**: signing in at either door works and moves the account
+to that role, because both are self-service and forcing a second email to switch would only
+produce two half-used accounts per person. **Admin is not self-service** — it cannot be requested
+at registration and cannot be reached by signing in at the admin door; both answer `403`. The
+grant comes from an allowlist applied at every registration and login, so adding an address
+promotes that account at its next sign-in and removing one demotes it. The committed default is
+**empty** — this is a public repo, and a real address in it would publish both who holds admin
+and their inbox. Set `auth.admin-emails` in `backend/secrets.yml`, or `AUTH_ADMIN_EMAILS` on a
+deployment, and pair it with `auth.admin-password` so the account can seed itself at boot.
+
 ### Venue codes
 
 A venue code (`WEMBLEY-01`) is the venue's `id`. It is client-supplied on `POST /venues`, travels
@@ -263,10 +291,13 @@ regenerated per run and cannot go on a sign.
 ## Tests
 
 ```bash
-cd backend    && ./mvnw test                               # 22 tests
-cd ai-service && .venv/Scripts/python -m pytest tests -q   # 40 tests (16 layout pipeline)
+cd backend    && ./mvnw test                               # 59 tests (37 auth, accounts, admin seeding)
+
+# pytest is not in requirements.txt — the runtime does not need it, so install it to test:
+cd ai-service && .venv/Scripts/python -m pip install pytest
+cd ai-service && .venv/Scripts/python -m pytest tests -q   # 47 tests (21 layout pipeline)
 cd ai-service && .venv/Scripts/python -m app.scoring       # model self-check
-cd frontend   && npm test          # routing, hazards and venue codes
+cd frontend   && npm test          # 23 — routing, hazards, venue codes, password rules
 cd frontend   && npm run test:render   # every route + live component renders without throwing
 ```
 

@@ -1,0 +1,31 @@
+# Cloud profile: managed Postgres instead of the local H2 file.
+#
+# Activate with SPRING_PROFILES_ACTIVE=cloud. Every value here comes from the environment so
+# the same jar deploys to any host without a rebuild, and no credential is ever committed.
+spring:
+  datasource:
+    url: ${DB_URL}
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+    hikari:
+      # Managed Postgres tiers cap connections far lower than Hikari default of 10 per
+      # instance; this leaves headroom for migrations and a second replica.
+      maximum-pool-size: ${DB_POOL_SIZE:5}
+  jpa:
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+  h2:
+    console:
+      enabled: false
+
+auth:
+  reset:
+    # Never echo a reset code to the caller in a deployed environment: the endpoint accepts any
+    # address without proof of ownership, so returning the code would hand every account away
+    # to anyone who asked. Deliver it by email from forgotPassword instead.
+    expose-code: false
+
+logging:
+  level:
+    com.crowdflow: INFO

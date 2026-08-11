@@ -170,7 +170,8 @@ a node that does not exist, a negative density.
 ## Tests
 
 ```bash
-.venv/Scripts/python -m pytest tests -q      # 8 checks, no token needed
+.venv/Scripts/python -m pip install pytest   # not in requirements.txt — the service does not need it
+.venv/Scripts/python -m pytest tests -q      # 47 checks, no token needed
 .venv/Scripts/python -m app.scoring          # model self-check
 ```
 
