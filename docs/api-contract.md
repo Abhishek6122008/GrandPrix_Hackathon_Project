@@ -17,6 +17,71 @@ still works, and is what the current React app calls.
 
 ---
 
+# Auth
+
+Reads are public so the marketing pages and the live map work signed-out. **Writes need a
+role.** Send the token as `Authorization: Bearer <token>`.
+
+| Request | Result |
+|---|---|
+| `/auth/**`, `/health`, `/actuator/**` | public |
+| **Any `GET`** under `/venues`, `/sessions`, `/simulations`, `/alerts` | public |
+| `WS /sessions/{id}/stream`, `WS /simulations/{id}/stream` | public — the upgrade is a `GET` |
+| Any **write** to those paths, no token | **401** — *who are you* |
+| Any **write** to those paths as `WALKER` | **403** — *known, but not allowed* |
+| Any **write** to those paths as `CLIENT` / `ADMIN` | allowed |
+
+So `POST /sessions`, `POST /venues`, `POST /simulations` and the `start`/`pause`/`stop` controls
+all need a `CLIENT` or `ADMIN` token; everything the live map reads does not.
+
+The 401/403 split is deliberate: a client uses it to decide between prompting a login and
+showing a permission error.
+
+## Endpoints
+
+```
+POST /auth/register         { email, password, role? }       -> 201 { token, tokenType, expiresIn, user }
+POST /auth/login            { email, password, portal? }     -> 200 { token, tokenType, expiresIn, user }
+POST /auth/forgot-password  { email }                        -> 200 { message, code?, expiresInSeconds? }
+POST /auth/reset-password   { email, code, password }        -> 200 { token, tokenType, expiresIn, user }
+GET  /auth/me               Authorization: Bearer ...        -> 200 { id, email, role, provider }
+```
+
+`user` is `{ id, email, role, provider }`. `role` is `WALKER`, `CLIENT` or `ADMIN`; `provider`
+is `LOCAL`, `SUPABASE` or `FIREBASE`.
+
+`role` on register accepts `walker` or `client` only — **`admin` is refused with 403**, as is
+signing in with `portal: "admin"` without being on the allowlist. `portal` on login is which of
+the three doors the form was opened at; walker and client are the same account and signing in at
+either moves the account to that role.
+
+**Three providers, one code path.** `JwtAuthFilter` offers each incoming token to every enabled
+verifier in turn and takes the first that recognises it, so a locally-minted, Supabase or
+Firebase token is accepted by the same endpoints. Only `LOCAL` has register/login here; the other
+two authenticate against their own provider and arrive holding a token, and the row is created on
+first sight.
+
+## Password reset
+
+`forgot-password` answers **200 for every address**, registered or not, disabled or not. That
+uniformity is the endpoint's entire security property: anyone may call it with any address, so a
+response that differed would be a free tool for testing which emails are registered.
+
+`code` is present in the response **only when it was not delivered anywhere else** — that is, when
+no mail account is configured. Once mail works the field disappears, because the endpoint accepts
+any address from anyone and a code in the response is a code handed to whoever typed the address
+rather than to whoever owns the inbox. The cloud profile forces it off regardless.
+
+Codes are 8 characters from a 32-letter alphabet with `I`, `O`, `0` and `1` removed, live for 30
+minutes, and are retired on first use, on a successful sign-in, and whenever a newer one is
+requested. A wrong or spent code is **400**.
+
+Passwords are 8–72 characters with at least one letter and one number, and no leading or trailing
+space. Every broken rule is reported at once in `details[]`. Full reasoning in
+[`auth-and-database.md`](auth-and-database.md).
+
+---
+
 # Sessions (live agent simulation)
 
 ## `POST /sessions`

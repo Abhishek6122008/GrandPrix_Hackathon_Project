@@ -11,6 +11,7 @@
     "test:render": "vite-node smoke.render.mjs && vite-node smoke.portals.mjs"
   },
   "dependencies": {
+    "@paper-design/shaders-react": "^0.0.80",
     "lucide-react": "^0.460.0",
     "motion": "^13.0.0",
     "react": "^19.1.0",
