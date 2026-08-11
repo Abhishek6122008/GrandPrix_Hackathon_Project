@@ -58,6 +58,10 @@ semantic stage, which needs the extra GPU dependencies listed in `requirements-l
 ```bash
 cd backend
 ./mvnw spring-boot:run
+
+if ran in regular cmd:
+mvnw spring-boot:run
+
 ```
 
 Needs JDK 21 or newer. **No database to install.** Accounts are written to an H2 file under
