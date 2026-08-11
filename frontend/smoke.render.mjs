@@ -44,7 +44,7 @@ globalThis.ResizeObserver = class {
 const { default: CrowdFlowApp } = await import('./CrowdFlowApp.jsx');
 
 const ROUTES = [
-  '#/', '#/platform', '#/intelligence', '#/results', '#/access',
+  '#/', '#/how', '#/platform', '#/intelligence', '#/results', '#/access',
   '#/login/walker', '#/login/client', '#/login/admin',
 ];
 

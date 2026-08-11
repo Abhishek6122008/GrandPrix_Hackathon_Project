@@ -8,6 +8,9 @@ import React, {
 } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "motion/react";
 import { api } from "./src/api.js";
+import {
+  emailError, passwordChecks, passwordError, passwordAcceptable, passwordStrength,
+} from "./src/credentials.js";
 import { useCrowdFlow } from "./src/useCrowdFlow.js";
 import { toMapVenue } from "./src/venueAdapter.js";
 import sampleVenue from "./src/sampleVenue.json";
@@ -20,12 +23,13 @@ import {
 } from "./src/venueCode.js";
 import {
   DoorOpen, Footprints, UtensilsCrossed, Armchair, LogOut, TrendingUp,
-  TrendingDown, Minus, Flag, Radio, Zap, AlertTriangle, ChevronLeft,
+  TrendingDown, Minus, Radio, Zap, AlertTriangle, ChevronLeft,
   ChevronRight, ChevronDown, MoveRight, Menu, X, Users, Activity, Cpu,
   Network, Gauge, Layers, ShieldCheck, Boxes, GitBranch, Check, Plus,
   MapPin, Navigation, Crosshair, Upload, Building2, UserCog, Ticket,
   Plus as PlusIcon, Minus as MinusIcon, Locate, Search, Bell, Trash2,
   Eye, Lock, Mail, ArrowRight, Wifi, WifiOff, Droplets, Coffee,
+  CircleCheck, CircleX,
 } from "lucide-react";
 
 /* ============================================================================
@@ -195,13 +199,23 @@ const STYLE = `
   :root{
     --cf-bg:#05070B; --cf-panel:#0B1018; --cf-card:#111826; --cf-card-hi:#182234;
     --cf-line:#1E2A3D; --cf-line2:#2A3852;
-    --cf-ink:#EEF2F8; --cf-dim:#8A97AC; --cf-dim2:#5B6880;
+    --cf-ink:#EEF2F8; --cf-dim:#A8A39F; --cf-dim2:#78736F;
     --cf-red:#E10600; --cf-orange:#FF6A00; --cf-amber:#FFB020;
     --cf-blue:#1B4FA8; --cf-blue-lo:#0C1B33; --cf-blue-hi:#4D8DF0;
     --cf-green:#00C853;
     /* Entrance/exit signage. Green in, violet out — the pairing reads at a glance and does not
        collide with the density ramp, which owns green→amber→orange→red. */
     --cf-violet:#A855F7;
+
+    /* Elevation ramp. Shadows are tuned dark and wide rather than black and tight: on a
+       near-black ground a tight shadow is invisible, so lift has to come from spread. */
+    --cf-shadow-sm:0 2px 8px -2px rgba(0,0,0,.6);
+    --cf-shadow-md:0 18px 46px -22px rgba(0,0,0,.78);
+    --cf-shadow-lg:0 40px 90px -40px rgba(0,0,0,.9);
+    --cf-glow-ember:0 0 0 1px rgba(255,106,0,.22), 0 18px 50px -24px rgba(225,6,0,.55);
+
+    /* One easing for everything that moves, so the whole UI decelerates with the same hand. */
+    --cf-ease:cubic-bezier(0.16,1,0.3,1);
   }
   .cf-root{ background:var(--cf-bg); color:var(--cf-ink); font-family:'Inter',system-ui,sans-serif; position:relative; min-height:100vh; }
   .cf-display{ font-family:'Big Shoulders Display','Arial Narrow',sans-serif; }
@@ -209,7 +223,12 @@ const STYLE = `
   .cf-mono{ font-family:'JetBrains Mono','SFMono-Regular',Menlo,monospace; }
 
   .cf-panel{ background:var(--cf-panel); }
-  .cf-card{ background:rgba(17,24,38,0.72); border:1px solid var(--cf-line); backdrop-filter:blur(10px); transition:transform .25s ease, box-shadow .25s ease, border-color .25s ease; }
+  .cf-card{ background:
+      linear-gradient(160deg, rgba(255,244,236,.05) 0%, rgba(255,244,236,0) 42%),
+      linear-gradient(168deg, rgba(30,26,24,.68), rgba(17,15,14,.76));
+    border:1px solid rgba(255,238,228,.09); border-top-color:rgba(255,240,230,.15);
+    box-shadow:inset 0 1px 0 rgba(255,246,240,.06);
+    backdrop-filter:blur(18px) saturate(130%); transition:transform .25s ease, box-shadow .25s ease, border-color .25s ease; }
   .cf-card-solid{ background:var(--cf-card); border:1px solid var(--cf-line); }
   .cf-lift:hover{ transform:translateY(-3px); border-color:var(--cf-line2); box-shadow:0 18px 46px -22px rgba(0,0,0,0.75); }
   .cf-hairline{ border-color:var(--cf-line); }
@@ -226,8 +245,27 @@ const STYLE = `
   .cf-mesh .m2{ width:46vw; height:46vw; right:-10vw; top:4vh; background:radial-gradient(circle, rgba(255,106,0,0.42), transparent 68%); animation:cf-drift2 32s ease-in-out infinite alternate; }
   .cf-mesh .m3{ width:60vw; height:60vw; left:10vw; top:38vh; background:radial-gradient(circle, rgba(27,79,168,0.55), transparent 70%); animation:cf-drift3 38s ease-in-out infinite alternate; }
   .cf-mesh .m4{ width:38vw; height:38vw; right:6vw; top:62vh; background:radial-gradient(circle, rgba(77,141,240,0.28), transparent 70%); animation:cf-drift1 30s ease-in-out infinite alternate-reverse; }
+  /* Paper Shaders grain gradient. Sits directly above the CSS mesh and below the veil, so it
+     replaces the mesh visually once it loads without either layer having to know about the
+     other. Fades in because the shader chunk arrives after first paint and a hard swap of the
+     whole page backdrop reads as a flash. */
+  .cf-shader{ position:fixed; inset:0; z-index:0; pointer-events:none; overflow:hidden;
+    opacity:0; animation:cf-shader-in 1.2s var(--cf-ease) forwards; }
+  @keyframes cf-shader-in{ to{ opacity:1; } }
+
+  /* The veil that keeps body copy readable over the backdrop.
+     Tuned against the shader, not the old CSS mesh: at the previous 0.55→0.94 ramp it was
+     near-opaque black by mid-page and the gradient underneath simply could not be seen. It
+     now stays light enough for the field to read through, and the pages that need the most
+     protection get it from their own card surfaces instead. */
   .cf-mesh-veil{ position:fixed; inset:0; z-index:0; pointer-events:none;
-    background:linear-gradient(180deg, rgba(5,7,11,0.55) 0%, rgba(5,7,11,0.82) 45%, rgba(5,7,11,0.94) 100%); }
+    background:linear-gradient(180deg, rgba(5,7,11,0.46) 0%, rgba(5,7,11,0.62) 45%, rgba(5,7,11,0.74) 100%); }
+
+  /* With the veil lightened, long-form text needs its own local protection so it never sits
+     directly on a bright band of the gradient. Applied to page roots that are mostly prose. */
+  .cf-readable{ position:relative; }
+  .cf-readable::before{ content:''; position:absolute; inset:0; z-index:-1; pointer-events:none;
+    background:radial-gradient(120% 60% at 50% 0%, rgba(5,7,11,.55), rgba(5,7,11,.82) 70%); }
 
   @keyframes cf-drift1{ from{ transform:translate3d(0,0,0) scale(1); } to{ transform:translate3d(6vw,7vh,0) scale(1.12); } }
   @keyframes cf-drift2{ from{ transform:translate3d(0,0,0) scale(1.05); } to{ transform:translate3d(-7vw,5vh,0) scale(.92); } }
@@ -281,10 +319,205 @@ const STYLE = `
 
   .cf-map-grab{ cursor:grab; } .cf-map-grab:active{ cursor:grabbing; }
 
+  /* ------------------------------------------------------------------ *
+   * Spotlight surfaces
+   *
+   * The cursor position is written to --mx/--my as percentages by JS (see <Spotlight>),
+   * and every layer below reads them. Keeping the values on the element as custom
+   * properties means the pointer handler only ever touches style properties that are
+   * composited — no React re-render per mousemove.
+   * ------------------------------------------------------------------ */
+  .cf-spot{ position:relative; isolation:isolate; }
+  .cf-spot::before{
+    content:''; position:absolute; inset:-1px; border-radius:inherit; z-index:0; pointer-events:none;
+    opacity:0; transition:opacity .4s var(--cf-ease);
+    background:radial-gradient(340px circle at var(--mx,50%) var(--my,50%),
+      color-mix(in oklab, var(--cf-spot-color, var(--cf-orange)) 20%, transparent), transparent 62%);
+  }
+  .cf-spot:hover::before, .cf-spot:focus-within::before{ opacity:1; }
+  .cf-spot > *{ position:relative; z-index:1; }
+
+  /* The hairline that lights up on hover. A masked gradient border: the ::after paints a
+     radial highlight and the mask punches out everything but a 1px rim. */
+  .cf-spot-edge::after{
+    content:''; position:absolute; inset:0; border-radius:inherit; z-index:0; pointer-events:none;
+    padding:1px; opacity:0; transition:opacity .4s var(--cf-ease);
+    background:radial-gradient(260px circle at var(--mx,50%) var(--my,50%),
+      var(--cf-spot-color, var(--cf-orange)), transparent 60%);
+    -webkit-mask:linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite:xor; mask:linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    mask-composite:exclude;
+  }
+  .cf-spot-edge:hover::after, .cf-spot-edge:focus-within::after{ opacity:.85; }
+
+  /* Bento tiles: same card material, but lift is scale-free so tall and short tiles in the
+     same grid rise by the same number of pixels and the row does not visually shear. */
+  /* Opacity is deliberately high: these sit over the shader backdrop, and at the ~0.75 that
+     suited the old CSS mesh a bright band of the gradient showed straight through and the
+     card stopped reading as a surface at all. */
+  /* Card material.
+   *
+   * Three things do the work here, and they are the pattern every dark-first product UI
+   * (Linear, Vercel, and most current Awwwards dark sites) converges on:
+   *
+   *  1. a directional fill — lighter at the top-left, darker at the bottom-right — which
+   *     implies a light source instead of reading as a flat swatch;
+   *  2. a 1px edge that is brighter along the top than the bottom, so the card has an
+   *     apparent thickness rather than a drawn outline;
+   *  3. an inset top highlight, the specular line real glass catches at its lip.
+   *
+   * Depth comes from luminance, not from a drop shadow — a shadow on a near-black ground is
+   * invisible anyway, which is why the old flat-fill-plus-outline version looked like a box.
+   */
+  .cf-bento{ position:relative; isolation:isolate; border-radius:1rem;
+    background:
+      linear-gradient(160deg, rgba(255,244,236,.055) 0%, rgba(255,244,236,0) 42%),
+      linear-gradient(168deg, rgba(34,29,27,.66), rgba(17,15,14,.76));
+    border:1px solid rgba(255,238,228,.09);
+    border-top-color:rgba(255,240,230,.16);
+    box-shadow:inset 0 1px 0 rgba(255,246,240,.07), 0 10px 30px -18px rgba(0,0,0,.9);
+    backdrop-filter:blur(18px) saturate(130%);
+    transition:transform .35s var(--cf-ease), border-color .35s var(--cf-ease), box-shadow .35s var(--cf-ease); }
+  .cf-bento:hover{ transform:translateY(-4px);
+    border-color:rgba(255,224,206,.18); border-top-color:rgba(255,232,216,.28);
+    box-shadow:inset 0 1px 0 rgba(255,246,240,.12), var(--cf-shadow-lg); }
+
+  /* Conic aurora used behind hero art and feature tiles. */
+  @keyframes cf-spin{ to{ transform:rotate(1turn); } }
+  .cf-aurora{ position:absolute; inset:-40%; pointer-events:none; opacity:.5; filter:blur(52px);
+    background:conic-gradient(from 0deg, transparent 0deg, rgba(225,6,0,.5) 60deg,
+      transparent 140deg, rgba(77,141,240,.45) 220deg, transparent 300deg, rgba(255,106,0,.5) 350deg, transparent 360deg);
+    animation:cf-spin 22s linear infinite; }
+
+  /* Ticker/edge fades — a marquee that hard-cuts at the container edge reads as clipped;
+     fading it to the page ground makes it read as continuing past the viewport. The fade
+     needs real width (15%) to land: at a few percent of a wide track the ramp is only a
+     handful of pixels and still reads as a hard cut. */
+  .cf-edge-fade{
+    -webkit-mask-image:linear-gradient(90deg, transparent 0%, #000 15%, #000 85%, transparent 100%);
+    mask-image:linear-gradient(90deg, transparent 0%, #000 15%, #000 85%, transparent 100%);
+    -webkit-mask-repeat:no-repeat; mask-repeat:no-repeat;
+    -webkit-mask-size:100% 100%; mask-size:100% 100%; }
+
+  /* Sweep of light across a surface on hover — used on primary CTAs. */
+  .cf-shine{ position:relative; overflow:hidden; }
+  .cf-shine::after{ content:''; position:absolute; top:0; bottom:0; left:-60%; width:40%;
+    background:linear-gradient(100deg, transparent, rgba(255,255,255,.28), transparent);
+    transform:skewX(-18deg); transition:left .65s var(--cf-ease); pointer-events:none; }
+  .cf-shine:hover::after{ left:120%; }
+
+  /* Scroll progress rail under the header. */
+  .cf-progress{ position:fixed; top:0; left:0; height:2px; z-index:60; transform-origin:0 50%;
+    background:linear-gradient(90deg, var(--cf-red), var(--cf-orange), var(--cf-blue-hi)); }
+
+  /* Tubelight nav indicator: a bar above the active item plus stacked blurs for the bloom. */
+  .cf-lamp{ position:absolute; left:50%; transform:translateX(-50%); top:-11px; width:26px; height:3px;
+    border-radius:0 0 3px 3px; background:linear-gradient(90deg, var(--cf-red), var(--cf-orange)); }
+  .cf-lamp span{ position:absolute; border-radius:9999px; background:rgba(255,106,0,.32); }
+  .cf-lamp .l1{ inset:-9px -12px auto -12px; height:22px; filter:blur(11px); }
+  .cf-lamp .l2{ inset:-5px -4px auto -4px; height:16px; filter:blur(7px); }
+
+  /* ------------------------------------------------------------------ *
+   * Core header treatment
+   *
+   * The diagonal grid-fade signature: a 32px rule grid masked to a radial ellipse anchored
+   * at the top-left, so it is crisp at the wordmark and gone by the middle of the bar. The
+   * source used --muted; here the lines are drawn in the app's own hairline colour.
+   * ------------------------------------------------------------------ */
+  .cf-gridfade{ position:absolute; inset:0; z-index:0; pointer-events:none;
+    background-image:linear-gradient(to right, var(--cf-line) 1px, transparent 1px),
+      linear-gradient(to bottom, var(--cf-line) 1px, transparent 1px);
+    background-size:32px 32px;
+    -webkit-mask-image:radial-gradient(ellipse 80% 80% at 0% 0%, #000 50%, transparent 90%);
+    mask-image:radial-gradient(ellipse 80% 80% at 0% 0%, #000 50%, transparent 90%); }
+
+  /* Filter strip. Hard-bordered cells rather than pills — the divider between items is what
+     makes it read as a strip of segments instead of a row of buttons. */
+  .cf-strip{ display:flex; flex:1; overflow-x:auto; scroll-behavior:smooth;
+    scrollbar-width:none; -ms-overflow-style:none; }
+  .cf-strip::-webkit-scrollbar{ display:none; }
+  .cf-strip-item{ position:relative; display:flex; align-items:center; justify-content:center;
+    flex-shrink:0; min-width:fit-content; cursor:pointer; white-space:nowrap;
+    padding:0.75rem 1.75rem; font-size:0.65rem; font-weight:800; text-transform:uppercase;
+    letter-spacing:0.16em; border-right:1px solid var(--cf-line); color:var(--cf-dim2);
+    transition:background-color .25s var(--cf-ease), color .25s var(--cf-ease); }
+  @media (min-width:768px){ .cf-strip-item{ font-size:0.72rem; } }
+  /* No divider after the final segment — a trailing rule reads as a cell with nothing in it. */
+  .cf-strip-item:last-child{ border-right:0; }
+  .cf-strip-item:hover{ background:rgba(255,255,255,0.04); color:var(--cf-ink); }
+  .cf-strip-item[data-active="true"]{ color:var(--cf-ink); background:rgba(255,255,255,0.05); }
+
+  /* Role card: art bay on top, copy in the middle, action bar pinned to the floor. */
+  .cf-rolecard{ position:relative; isolation:isolate; overflow:hidden; border-radius:1rem;
+    background:
+      linear-gradient(160deg, rgba(255,244,236,.055) 0%, rgba(255,244,236,0) 42%),
+      linear-gradient(168deg, rgba(34,29,27,.66), rgba(17,15,14,.76));
+    border:1px solid rgba(255,238,228,.09); border-top-color:rgba(255,240,230,.16);
+    box-shadow:inset 0 1px 0 rgba(255,246,240,.07), 0 10px 30px -18px rgba(0,0,0,.9);
+    backdrop-filter:blur(18px) saturate(130%);
+    transition:transform .35s var(--cf-ease), border-color .35s var(--cf-ease), box-shadow .35s var(--cf-ease); }
+  .cf-rolecard:hover{ transform:translateY(-5px);
+    border-color:rgba(255,224,206,.18); border-top-color:rgba(255,232,216,.30);
+    box-shadow:inset 0 1px 0 rgba(255,246,240,.12), var(--cf-shadow-lg); }
+
+  .cf-rolecard-art{ position:relative; display:block; height:8.5rem; padding:1rem 1.25rem 0;
+    border-bottom:1px solid rgba(255,238,228,.07); overflow:hidden; }
+  /* Accent bleeds up from the floor of the bay, so colour arrives as light. */
+  .cf-rolecard-glow{ position:absolute; inset:auto -20% -60% -20%; height:130%;
+    background:radial-gradient(60% 100% at 50% 100%, color-mix(in oklab, var(--accent) 30%, transparent), transparent 72%);
+    opacity:.5; transition:opacity .4s var(--cf-ease); pointer-events:none; }
+  .cf-rolecard:hover .cf-rolecard-glow{ opacity:.85; }
+  .cf-rolecard-art svg{ position:relative; z-index:1; }
+
+  .cf-rolecard-index{ position:absolute; top:.35rem; right:.85rem; z-index:2;
+    font-weight:900; font-size:2.75rem; line-height:1; letter-spacing:-.02em;
+    color:transparent; -webkit-text-stroke:1px rgba(255,240,230,.16); user-select:none; }
+  .cf-rolecard:hover .cf-rolecard-index{ -webkit-text-stroke-color:color-mix(in oklab, var(--accent) 45%, transparent); }
+
+  .cf-rolecard-foot{ display:flex; align-items:center; justify-content:space-between;
+    padding:.85rem 1.5rem; border-top:1px solid rgba(255,238,228,.07);
+    background:linear-gradient(180deg, transparent, color-mix(in oklab, var(--accent) 7%, transparent));
+    transition:background .35s var(--cf-ease); }
+  .cf-rolecard:hover .cf-rolecard-foot{
+    background:linear-gradient(180deg, transparent, color-mix(in oklab, var(--accent) 16%, transparent)); }
+
+  /* Stat band. Shares the card material so it belongs to the same system, with 1px inner
+     rules between cells rather than an opaque plate behind them. */
+  .cf-statband{
+    background:
+      linear-gradient(160deg, rgba(255,244,236,.045) 0%, rgba(255,244,236,0) 45%),
+      linear-gradient(168deg, rgba(30,26,24,.55), rgba(17,15,14,.66));
+    border:1px solid rgba(255,238,228,.08); border-top-color:rgba(255,240,230,.14);
+    box-shadow:inset 0 1px 0 rgba(255,246,240,.06);
+    backdrop-filter:blur(18px) saturate(130%); }
+  .cf-statcell{ border-right:1px solid rgba(255,238,228,.07); }
+  .cf-statcell:last-child{ border-right:0; }
+  @media (max-width:767px){
+    .cf-statcell:nth-child(2n){ border-right:0; }
+    .cf-statcell:nth-child(-n+2){ border-bottom:1px solid rgba(255,238,228,.07); }
+  }
+
+  /* Section divider that fades out at both ends instead of butting into the gutter. */
+  .cf-rule{ height:1px; border:0;
+    background:linear-gradient(90deg, transparent, var(--cf-line2), transparent); }
+
+  /* Numeric labels that should not reflow as digits change (counters, clocks). */
+  .cf-tnum{ font-variant-numeric:tabular-nums; }
+
+  @keyframes cf-float{ 0%,100%{ transform:translateY(0); } 50%{ transform:translateY(-9px); } }
+  .cf-float{ animation:cf-float 6s ease-in-out infinite; }
+
+  @keyframes cf-sweep{ 0%{ transform:translateX(-100%); } 100%{ transform:translateX(300%); } }
+  .cf-sweep{ animation:cf-sweep 3.2s var(--cf-ease) infinite; }
+
   @media (prefers-reduced-motion: reduce){
     .cf-mesh span{ animation:none !important; }
     .cf-marquee-track,.cf-dash,.cf-flow,.cf-bounce,.cf-ping,.cf-pulse{ animation:none !important; }
     .cf-reveal{ opacity:1 !important; transform:none !important; transition:none !important; }
+    .cf-aurora,.cf-float,.cf-sweep{ animation:none !important; }
+    .cf-shader{ animation:none !important; opacity:1; }
+    .cf-shine::after{ display:none; }
+    .cf-bento:hover{ transform:none; }
   }
 `;
 
@@ -1135,7 +1368,13 @@ function usePrefersReducedMotion() {
   return r;
 }
 
-function Reveal({ children, delay = 0 }) {
+/**
+ * Scroll-reveal wrapper.
+ *
+ * `className` matters when a Reveal is a direct grid child: this element, not the content
+ * inside it, is what the grid lays out, so column/row spans have to land here.
+ */
+function Reveal({ children, delay = 0, className = "" }) {
   const ref = useRef(null);
   const [inView, setInView] = useState(false);
   useEffect(() => {
@@ -1147,15 +1386,83 @@ function Reveal({ children, delay = 0 }) {
     io.observe(el);
     return () => io.disconnect();
   }, []);
-  return <div ref={ref} className={`cf-reveal ${inView ? "cf-in" : ""}`} style={{ transitionDelay: `${delay}ms` }}>{children}</div>;
+  return <div ref={ref} className={`cf-reveal ${inView ? "cf-in" : ""} ${className}`} style={{ transitionDelay: `${delay}ms` }}>{children}</div>;
 }
 
+/**
+ * The page backdrop.
+ *
+ * A Paper Shaders grain gradient (WebGL) drifting behind the whole site, with the original
+ * CSS mesh kept underneath it as the fallback. The shader is loaded lazily and mounted only
+ * in the browser, for three reasons that all have to hold at once:
+ *
+ *  - the render smoke test runs this file through react-dom/server against a hand-written DOM
+ *    shim with no canvas and no WebGL, so a shader mounting during render would break it;
+ *  - the shader bundle is ~430KB and nothing above the fold needs it to paint, so keeping it
+ *    out of the main chunk is what stops the backdrop delaying first contentful paint;
+ *  - a machine with WebGL disabled or blocked must still get a backdrop rather than a void.
+ *
+ * Under `prefers-reduced-motion` the shader is never loaded at all — it is a continuously
+ * animating full-viewport surface, which is exactly what that setting is asking us not to run.
+ * The CSS mesh underneath is already static in that mode, so the page keeps its depth.
+ */
 function MeshField() {
+  const reduced = usePrefersReducedMotion();
+  const [Shader, setShader] = useState(null);
+
+  useEffect(() => {
+    // A cheap capability probe: importing the shader bundle on a machine that cannot run it
+    // would be pure download cost for a canvas that never paints.
+    try {
+      const probe = document.createElement("canvas");
+      const gl = probe.getContext("webgl2") || probe.getContext("webgl");
+      if (!gl) return;
+    } catch { return; }
+
+    let alive = true;
+    import("@paper-design/shaders-react")
+      .then((m) => { if (alive && m?.GrainGradient) setShader(() => m.GrainGradient); })
+      .catch(() => { /* stay on the CSS mesh */ });
+    return () => { alive = false; };
+  }, []);
+
   return (
     <>
-      <div className="cf-mesh" aria-hidden="true">
+      {/* Fallback / underlay. Always rendered: it is what shows before the shader chunk
+          arrives, and what remains if WebGL is unavailable or reduced-motion is set. Once
+          the shader is up the mesh fades out — two full-viewport colour fields stacked on
+          each other muddy both, and the shader is the better of the two. */}
+      <div className="cf-mesh" aria-hidden="true"
+        style={{ opacity: Shader ? 0 : 1, transition: "opacity 1.2s var(--cf-ease)" }}>
         <span className="m1" /><span className="m2" /><span className="m3" /><span className="m4" />
       </div>
+
+      {Shader && (
+        <div className="cf-shader" aria-hidden="true">
+          <Shader
+            style={{ width: "100%", height: "100%" }}
+            colorBack="#05070B"
+            /* The brand ramp: deep blue for the calm ground, then the ember pair, so the
+               field reads as the density scale the product is built on rather than as
+               arbitrary decoration. Brightened well past the token colours on purpose —
+               these are seen through the veil above, which knocks them back. */
+            colors={["#1B4FA8", "#4D8DF0", "#E10600", "#FF6A00"]}
+            shape="corners"
+            softness={0.62}
+            intensity={0.55}
+            noise={0.32}
+            /* Reduced motion freezes the field rather than removing it. Windows in particular
+               reports `reduce` whenever "show animations" is off, which is a common default —
+               dropping the backdrop entirely there cost those users the whole design for a
+               setting that only ever asked us to stop moving things. speed:0 renders one
+               static frame, which is exactly what the preference is asking for. */
+            speed={reduced ? 0 : 0.9}
+          />
+        </div>
+      )}
+
+      {/* The veil sits above both layers. At full strength the shader would compete with the
+          UI for attention and wreck contrast on body copy; this is what keeps it a backdrop. */}
       <div className="cf-mesh-veil" aria-hidden="true" />
       <svg className="cf-grain" aria-hidden="true">
         <filter id="cf-noise">
@@ -1173,6 +1480,662 @@ function Eyebrow({ children }) {
     <div className="inline-flex items-center gap-2 cf-accent text-[11px] cf-chip rounded-full px-3 py-1 cf-dim">
       {children}
     </div>
+  );
+}
+
+/**
+ * The product mark.
+ *
+ * Three swept channels narrowing into a gate, coloured with the density ramp the rest of the
+ * app uses — clear blue on top, warming through orange, jammed red at the bottom — with the
+ * apex dot standing for the bottleneck being predicted. Inline rather than an <img> so the
+ * strokes can inherit currentColor when it is placed on a coloured surface, and so it costs
+ * no extra request. `public/favicon.svg` is the same drawing, tuned for 16px.
+ */
+function LogoMark({ size = 32, className = "" }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 64 64" className={className} aria-hidden="true" focusable="false">
+      <defs>
+        <linearGradient id="cf-logo-ember" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor="var(--cf-red)" />
+          <stop offset="1" stopColor="var(--cf-orange)" />
+        </linearGradient>
+      </defs>
+      <rect width="64" height="64" rx="15" fill="var(--cf-panel)" />
+      <rect x="0.75" y="0.75" width="62.5" height="62.5" rx="14.25" fill="none"
+        stroke="url(#cf-logo-ember)" strokeOpacity="0.55" strokeWidth="1.5" />
+      <g fill="none" strokeWidth="9" strokeLinecap="round">
+        <path d="M13 17 H35" stroke="var(--cf-blue-hi)" />
+        <path d="M13 32 H44" stroke="var(--cf-orange)" />
+        <path d="M13 47 H29" stroke="var(--cf-red)" />
+      </g>
+      <circle cx="50" cy="32" r="5.5" fill="var(--cf-ink)" />
+    </svg>
+  );
+}
+
+/** Wordmark + mark, so the header and footer cannot drift apart. */
+function Wordmark({ size = 32, className = "" }) {
+  return (
+    <span className={`flex items-center gap-2.5 ${className}`}>
+      <LogoMark size={size} />
+      <span className="cf-display font-bold uppercase tracking-wide text-base leading-none">
+        Crowd Flow<span className="cf-dim font-normal"> Optimiser</span>
+      </span>
+    </span>
+  );
+}
+
+/**
+ * Cursor-following spotlight on a surface.
+ *
+ * Writes the pointer position to --mx/--my as percentages and lets CSS do the painting, so
+ * a mousemove never triggers a React render — at 60Hz over a grid of these, setState would
+ * be the single most expensive thing on the page. Pointer events are ignored on coarse
+ * pointers, where there is no cursor to follow and the listener would only cost battery.
+ */
+function Spotlight({ as: Tag = "div", color, className = "", style, children, ...rest }) {
+  const ref = useRef(null);
+
+  const onMove = useCallback((e) => {
+    const el = ref.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    el.style.setProperty("--mx", `${((e.clientX - r.left) / r.width) * 100}%`);
+    el.style.setProperty("--my", `${((e.clientY - r.top) / r.height) * 100}%`);
+  }, []);
+
+  return (
+    <Tag
+      ref={ref}
+      onPointerMove={(e) => { if (e.pointerType !== "touch") onMove(e); }}
+      className={`cf-spot cf-spot-edge ${className}`}
+      style={color ? { ...style, "--cf-spot-color": color } : style}
+      {...rest}
+    >
+      {children}
+    </Tag>
+  );
+}
+
+/** Thin reading-progress rail pinned under the header. */
+function ScrollProgress() {
+  const ref = useRef(null);
+  useEffect(() => {
+    // Written straight to the node on scroll for the same reason as <Spotlight>: this fires
+    // on every frame of a scroll and must not go through React.
+    const on = () => {
+      const el = ref.current;
+      if (!el) return;
+      const max = document.documentElement.scrollHeight - window.innerHeight;
+      el.style.transform = `scaleX(${max > 0 ? Math.min(1, window.scrollY / max) : 0})`;
+    };
+    on();
+    window.addEventListener("scroll", on, { passive: true });
+    window.addEventListener("resize", on);
+    return () => { window.removeEventListener("scroll", on); window.removeEventListener("resize", on); };
+  }, []);
+  return <div ref={ref} className="cf-progress w-full" style={{ transform: "scaleX(0)" }} aria-hidden="true" />;
+}
+
+/**
+ * A button that leans toward the cursor.
+ *
+ * Capped at a few pixels — enough to feel responsive, small enough that the button never
+ * slides out from under the pointer that is chasing it.
+ */
+function Magnetic({ children, strength = 6, className = "", ...rest }) {
+  const ref = useRef(null);
+  const reduced = usePrefersReducedMotion();
+
+  const onMove = (e) => {
+    const el = ref.current;
+    if (!el || reduced) return;
+    const r = el.getBoundingClientRect();
+    const dx = (e.clientX - (r.left + r.width / 2)) / (r.width / 2);
+    const dy = (e.clientY - (r.top + r.height / 2)) / (r.height / 2);
+    el.style.transform = `translate(${dx * strength}px, ${dy * strength}px)`;
+  };
+  const reset = () => { if (ref.current) ref.current.style.transform = "translate(0,0)"; };
+
+  return (
+    <span ref={ref} onPointerMove={onMove} onPointerLeave={reset}
+      className={`inline-block will-change-transform ${className}`}
+      style={{ transition: "transform .35s var(--cf-ease)" }} {...rest}>
+      {children}
+    </span>
+  );
+}
+
+/** Seamless marquee. The track is duplicated so the -50% keyframe lands on an identical frame. */
+function Ticker({ items, className = "" }) {
+  return (
+    <div className={`overflow-hidden cf-edge-fade ${className}`} aria-hidden="true">
+      <div className="cf-marquee-track flex w-max items-center gap-10">
+        {[0, 1].map((copy) => (
+          <React.Fragment key={copy}>
+            {items.map((t, i) => (
+              <span key={`${copy}-${i}`} className="flex items-center gap-10 shrink-0">
+                <span className="cf-accent text-[11px] cf-dim2 whitespace-nowrap">{t}</span>
+                <span className="w-1 h-1 rounded-full shrink-0" style={{ background: "var(--cf-line2)" }} />
+              </span>
+            ))}
+          </React.Fragment>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * A headline figure that counts up the first time it is scrolled into view.
+ *
+ * Distinct from <CountUp>, which tracks a value that keeps changing on a live feed. This one
+ * animates once, from zero, as a reveal — so it is driven by an IntersectionObserver rather
+ * than by prop changes, and it deliberately never replays on scroll-back.
+ */
+function CountOnView({ value, prefix = "", suffix = "", duration = 1400 }) {
+  const ref = useRef(null);
+  const reduced = usePrefersReducedMotion();
+  const [shown, setShown] = useState(reduced ? value : 0);
+
+  useEffect(() => {
+    if (reduced) { setShown(value); return; }
+    const el = ref.current;
+    if (!el || typeof IntersectionObserver === "undefined") { setShown(value); return; }
+
+    let raf = 0, start = 0;
+    const io = new IntersectionObserver((es) => {
+      if (!es[0]?.isIntersecting) return;
+      io.disconnect();
+      const step = (t) => {
+        if (!start) start = t;
+        const p = Math.min(1, (t - start) / duration);
+        // Same deceleration curve as --cf-ease, so the number settles like everything else.
+        setShown(value * (1 - Math.pow(1 - p, 3)));
+        if (p < 1) raf = requestAnimationFrame(step);
+      };
+      raf = requestAnimationFrame(step);
+    }, { threshold: 0.4 });
+
+    io.observe(el);
+    return () => { io.disconnect(); cancelAnimationFrame(raf); };
+  }, [value, duration, reduced]);
+
+  return <span ref={ref}>{prefix}{Math.round(shown).toLocaleString()}{suffix}</span>;
+}
+
+/* ----------------------------------------------------------------------------
+   Dot-matrix reveal — supplied component's shader, ported to this project's WebGL engine.
+
+   The GLSL below is the author's fragment shader essentially unchanged: the same dot grid,
+   the same `random`/PHI hash, the same intro timing that fans out from the centre and outro
+   timing that collapses in from the edges via `u_reverse`.
+
+   What changed is the engine underneath it. The original mounts the shader through
+   @react-three/fiber, which pulls in Three.js — about 25MB for one screen's backdrop. This
+   app already ships @paper-design/shaders-react (~430KB), whose <ShaderMount> takes an
+   arbitrary fragment shader and supplies u_time/u_resolution on the same GLSL 3.00 ES
+   target. Two edits were needed to retarget it:
+
+     - the R3F version declares `in vec2 fragCoord` from its own vertex shader; here the
+       built-in gl_FragCoord is used instead, so no custom vertex stage is required;
+     - uniforms are passed as plain values rather than the {value,type} descriptors that
+       version hand-marshals into THREE.Vector3 objects.
+   -------------------------------------------------------------------------- */
+
+const DOT_MATRIX_FRAGMENT = `#version 300 es
+precision mediump float;
+
+uniform float u_time;
+uniform vec2 u_resolution;
+uniform float u_opacities[10];
+uniform vec3 u_colors[6];
+uniform float u_total_size;
+uniform float u_dot_size;
+uniform float u_reverse;
+uniform float u_speed;
+
+out vec4 fragColor;
+
+float PHI = 1.61803398874989484820459;
+float random(vec2 xy) {
+  return fract(tan(distance(xy * PHI, xy) * 0.5) * xy.x);
+}
+
+void main() {
+  vec2 st = gl_FragCoord.xy;
+  st.x -= abs(floor((mod(u_resolution.x, u_total_size) - u_dot_size) * 0.5));
+  st.y -= abs(floor((mod(u_resolution.y, u_total_size) - u_dot_size) * 0.5));
+
+  float opacity = step(0.0, st.x);
+  opacity *= step(0.0, st.y);
+
+  vec2 st2 = vec2(int(st.x / u_total_size), int(st.y / u_total_size));
+
+  float frequency = 5.0;
+  float show_offset = random(st2);
+  float rand = random(st2 * floor((u_time / frequency) + show_offset + frequency));
+  opacity *= u_opacities[int(rand * 10.0)];
+  opacity *= 1.0 - step(u_dot_size / u_total_size, fract(st.x / u_total_size));
+  opacity *= 1.0 - step(u_dot_size / u_total_size, fract(st.y / u_total_size));
+
+  vec3 color = u_colors[int(show_offset * 6.0)];
+
+  vec2 center_grid = u_resolution / 2.0 / u_total_size;
+  float dist_from_center = distance(center_grid, st2);
+
+  float timing_offset_intro = dist_from_center * 0.01 + (random(st2) * 0.15);
+  float max_grid_dist = distance(center_grid, vec2(0.0, 0.0));
+  float timing_offset_outro = (max_grid_dist - dist_from_center) * 0.02 + (random(st2 + 42.0) * 0.2);
+
+  float t = u_time * u_speed;
+  if (u_reverse > 0.5) {
+    opacity *= 1.0 - step(timing_offset_outro, t);
+    opacity *= clamp((step(timing_offset_outro + 0.1, t)) * 1.25, 1.0, 1.25);
+  } else {
+    opacity *= step(timing_offset_intro, t);
+    opacity *= clamp((1.0 - step(timing_offset_intro + 0.1, t)) * 1.25, 1.0, 1.25);
+  }
+
+  fragColor = vec4(color, opacity);
+  fragColor.rgb *= fragColor.a;
+}`;
+
+/**
+ * The dot grid itself. Lazy-loads the shader engine for the same reasons <MeshField> does:
+ * it must not run during the server-render smoke test, and the bundle should not block paint.
+ * If WebGL is unavailable the component simply renders nothing — it is pure decoration, and
+ * the sign-in panel above it stands on its own.
+ */
+function CanvasRevealEffect({ colors = [[255, 255, 255]], dotSize = 6, speed = 3, reverse = false, opacity = 1 }) {
+  const [Mount, setMount] = useState(null);
+
+  useEffect(() => {
+    try {
+      const probe = document.createElement("canvas");
+      if (!(probe.getContext("webgl2") || probe.getContext("webgl"))) return;
+    } catch { return; }
+    let alive = true;
+    import("@paper-design/shaders-react")
+      .then((m) => { if (alive && m?.ShaderMount) setMount(() => m.ShaderMount); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
+
+  // The author's DotMatrix widens 1–3 supplied colours into the 6 the shader indexes into.
+  const uniforms = useMemo(() => {
+    const c = colors.length >= 3
+      ? [colors[0], colors[0], colors[1], colors[1], colors[2], colors[2]]
+      : colors.length === 2
+        ? [colors[0], colors[0], colors[0], colors[1], colors[1], colors[1]]
+        : Array(6).fill(colors[0]);
+    return {
+      u_colors: c.map(([r, g, b]) => [r / 255, g / 255, b / 255]),
+      u_opacities: [0.3, 0.3, 0.3, 0.5, 0.5, 0.5, 0.8, 0.8, 0.8, 1],
+      u_total_size: 20,
+      u_dot_size: dotSize,
+      u_reverse: reverse ? 1 : 0,
+      u_speed: speed * 0.1,
+    };
+  }, [colors, dotSize, reverse, speed]);
+
+  if (!Mount) return null;
+  return (
+    <div className="absolute inset-0" style={{ opacity }} aria-hidden="true">
+      <Mount fragmentShader={DOT_MATRIX_FRAGMENT} uniforms={uniforms}
+        style={{ width: "100%", height: "100%" }} />
+    </div>
+  );
+}
+
+/* ----------------------------------------------------------------------------
+   Core header — supplied component, ported TSX → JS.
+
+   Two changes from the source, both forced by this codebase rather than taste:
+
+   - the shadcn semantic tokens it was written against (--muted, --primary, --accent,
+     bg-background) do not exist here, so every colour is re-pointed at the --cf-* palette;
+   - the avatar is optional. The original always renders a face and the words "Active Now",
+     which on a marketing page would tell a logged-out visitor they are signed in.
+   -------------------------------------------------------------------------- */
+
+/**
+ * The bar itself: a title on the left, an optional signed-in identity on the right, and the
+ * diagonal grid-fade behind both. `children` is the slot the marketing header fills with its
+ * nav, so both surfaces share one chrome.
+ */
+function CoreHeaderBar({ title, eyebrow, userName, userStatus = "Active now", userImage, accent, children, right }) {
+  return (
+    <div className="relative h-16 flex items-center justify-between gap-4 px-4 sm:px-6 overflow-hidden">
+      <div className="cf-gridfade" aria-hidden="true" />
+
+      <div className="relative z-10 flex items-center gap-3 min-w-0">
+        {title}
+      </div>
+
+      {children}
+
+      <div className="relative z-10 flex items-center gap-3 shrink-0">
+        {right}
+        {userName && (
+          <>
+            <div className="hidden sm:flex flex-col items-end leading-tight">
+              <span className="cf-accent text-[10px] truncate max-w-[16ch]" style={{ color: "var(--cf-ink)" }}>{userName.toUpperCase()}</span>
+              <span className="cf-accent text-[9px] cf-dim2 opacity-70 flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full" style={{ background: accent || "var(--cf-green)" }} />
+                {userStatus.toUpperCase()}
+              </span>
+            </div>
+            <div className="size-9 rounded-full overflow-hidden p-0.5 shrink-0"
+              style={{ border: `1px solid ${accent || "var(--cf-line2)"}`, background: "var(--cf-panel)" }}>
+              {userImage
+                ? <img src={userImage} alt="" className="size-full rounded-full object-cover" />
+                : (
+                  /* No photo in this product — an initial on the role's own colour identifies
+                     the account without inventing a face for it. */
+                  <span className="size-full rounded-full flex items-center justify-center cf-display font-black text-xs"
+                    style={{ background: `color-mix(in oklab, ${accent || "var(--cf-blue-hi)"} 22%, transparent)`, color: accent || "var(--cf-blue-hi)" }}>
+                    {userName.trim().charAt(0).toUpperCase()}
+                  </span>
+                )}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The segmented filter strip. Horizontally scrollable with the scrollbar hidden, and a fade
+ * on the right edge so a strip that overflows reads as continuing rather than as cut off.
+ */
+function CoreStrip({ links, current, onChange, accent, transparent = false }) {
+  return (
+    <div className="relative group transition-colors duration-300"
+      style={{
+        borderTop: `1px solid ${transparent ? "transparent" : "var(--cf-line)"}`,
+        background: "transparent",
+      }}>
+      <div className="cf-strip">
+        {links.map((l) => {
+          const active = current === l.href;
+          return (
+            <button key={l.href} type="button" onClick={() => onChange(l.href)}
+              data-active={active} aria-current={active ? "page" : undefined}
+              className="cf-strip-item cf-focus"
+              style={active ? { color: accent || "var(--cf-orange)" } : undefined}>
+              {l.name}
+              {active && (
+                <motion.span layoutId="cf-strip-underline" className="absolute left-0 right-0 bottom-0 h-0.5"
+                  initial={false} transition={{ type: "spring", stiffness: 380, damping: 32 }}
+                  style={{ background: accent || "var(--cf-orange)" }} />
+              )}
+            </button>
+          );
+        })}
+      </div>
+      <div className="md:hidden absolute right-0 top-0 bottom-0 w-8 pointer-events-none"
+        style={{ background: "linear-gradient(270deg, var(--cf-bg), transparent)" }} aria-hidden="true" />
+    </div>
+  );
+}
+
+/* ----------------------------------------------------------------------------
+   Bento tile visuals — supplied component's pattern, ported TSX → JS.
+
+   The structure is kept: an asymmetric 6-column grid where each tile carries a small live
+   animation above its label, instead of a static icon. The demos themselves are rewritten,
+   because the originals showed a scaling "Aa", a CDN globe and a phone — none of which this
+   product does. Each one below animates a mechanic the copy underneath actually claims, so
+   the picture is evidence for the sentence rather than decoration beside it.
+
+   All of them freeze under `prefers-reduced-motion`: they are decorative loops, and a
+   permanently cycling animation is the thing that setting exists to stop.
+   -------------------------------------------------------------------------- */
+
+/**
+ * Congestion spreading along the graph.
+ *
+ * A row of five zones. One goes critical, then its neighbours climb in sequence — the
+ * propagation the model predicts, which a per-node threshold cannot see coming.
+ */
+function DemoPropagation() {
+  const reduced = usePrefersReducedMotion();
+  const [step, setStep] = useState(reduced ? 2 : 0);
+
+  useEffect(() => {
+    if (reduced) return;
+    const t = setInterval(() => setStep((s) => (s + 1) % 5), 900);
+    return () => clearInterval(t);
+  }, [reduced]);
+
+  // Distance from the origin zone decides how hot each bar is, so the wave reads as
+  // travelling outward rather than as five independent blinks.
+  const heat = (i) => {
+    const d = Math.abs(i - 2);
+    const reach = step - d;
+    return reach <= 0 ? 0 : Math.min(1, reach / 2);
+  };
+
+  return (
+    // A fixed-height track keeps the bars vertically centred in the tile: percentage heights
+    // need a definite box to resolve against, and the flex parent alone does not give them one.
+    <div className="h-full flex items-center justify-center" aria-hidden="true">
+      <div className="flex items-end justify-center gap-2 h-24">
+        {[0, 1, 2, 3, 4].map((i) => {
+          const h = heat(i);
+          return (
+            <motion.div key={i} className="w-7 rounded-md"
+              animate={{ height: `${26 + h * 70}px`, backgroundColor: densityColor(h * 0.95) }}
+              transition={{ duration: 0.55, ease: [0.16, 1, 0.3, 1] }}
+              style={{ height: "26px", background: densityColor(0) }} />
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * A route bending around a jam.
+ *
+ * The straight path through the middle turns red; the drawn line takes the long way round.
+ * Two stroked paths on one viewBox, cross-fading, so the detour reads as a decision.
+ */
+function DemoRoute() {
+  const reduced = usePrefersReducedMotion();
+  const [detour, setDetour] = useState(reduced);
+
+  useEffect(() => {
+    if (reduced) return;
+    const t = setInterval(() => setDetour((d) => !d), 2400);
+    return () => clearInterval(t);
+  }, [reduced]);
+
+  return (
+    <div className="h-full flex items-center justify-center" aria-hidden="true">
+      <svg viewBox="0 0 160 80" className="w-full max-w-[190px] h-full">
+        <line x1="12" y1="40" x2="148" y2="40" stroke="var(--cf-line2)" strokeWidth="2" strokeDasharray="3 4" />
+        <motion.circle cx="80" cy="40" r="9"
+          animate={{ fill: detour ? "var(--cf-red)" : "var(--cf-line2)", opacity: detour ? 0.9 : 0.45 }}
+          transition={{ duration: 0.5 }} />
+        <motion.path
+          d={detour ? "M12 40 Q 50 40 62 22 Q 80 6 98 22 Q 110 40 148 40" : "M12 40 L148 40"}
+          fill="none" stroke="var(--cf-blue-hi)" strokeWidth="2.5" strokeLinecap="round"
+          animate={{ d: detour ? "M12 40 Q 50 40 62 22 Q 80 6 98 22 Q 110 40 148 40" : "M12 40 L148 40" }}
+          transition={{ duration: 0.7, ease: [0.16, 1, 0.3, 1] }} />
+        <circle cx="12" cy="40" r="4" fill="var(--cf-green)" />
+        <circle cx="148" cy="40" r="4" fill="var(--cf-violet)" />
+      </svg>
+    </div>
+  );
+}
+
+/**
+ * The paired baseline.
+ *
+ * Two bars — the run without rerouting against the run with it — counting to their values,
+ * which is the entire claim of the results page in one picture.
+ */
+function DemoBaseline() {
+  const reduced = usePrefersReducedMotion();
+  const [on, setOn] = useState(false);
+
+  useEffect(() => {
+    if (reduced) return;
+    // Asymmetric on purpose: a long rest at the real value, then a brief snap back to 100%
+    // to replay the drop. An even flip would leave the "no difference" frame on screen half
+    // the time.
+    let t;
+    const cycle = () => {
+      setOn(true);
+      t = setTimeout(() => { setOn(false); t = setTimeout(cycle, 2600); }, 380);
+    };
+    t = setTimeout(cycle, 2600);
+    return () => clearTimeout(t);
+  }, [reduced]);
+
+  // The baseline is the constant to compare against, so it stays pinned at 100%.
+  //
+  // The optimised bar rests at its real value and only springs back to 100% for the instant
+  // the loop replays. An earlier version split the cycle evenly between 72% and 100%, which
+  // meant half of every loop showed two identical bars — a state that says the intervention
+  // did nothing, i.e. the opposite of the claim, and reads as a broken chart when a
+  // screenshot happens to land on it.
+  const rows = [
+    { l: "NO STRATEGY", pct: 100, c: "var(--cf-red)" },
+    { l: "WITH STRATEGY", pct: on ? 100 : 72, c: "var(--cf-green)" },
+  ];
+
+  return (
+    <div className="h-full flex flex-col justify-center gap-4 w-full" aria-hidden="true">
+      {rows.map((r) => (
+        <div key={r.l}>
+          <div className="flex justify-between mb-1.5">
+            <span className="cf-accent text-[9px] cf-dim2">{r.l}</span>
+            <span className="cf-mono text-[10px] cf-tnum" style={{ color: r.c }}>{r.pct}%</span>
+          </div>
+          <div className="h-2 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.06)" }}>
+            <motion.div className="h-full rounded-full"
+              initial={false}
+              animate={{ width: `${r.pct}%` }}
+              transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
+              style={{ background: r.c }} />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Live tick counter — the ~100ms cadence, stated as a number that keeps moving. */
+function DemoTick() {
+  const reduced = usePrefersReducedMotion();
+  const [tick, setTick] = useState(1284);
+
+  useEffect(() => {
+    if (reduced) return;
+    const t = setInterval(() => setTick((n) => n + 1), 420);
+    return () => clearInterval(t);
+  }, [reduced]);
+
+  return (
+    <div className="h-full flex flex-col items-center justify-center gap-2" aria-hidden="true">
+      <div className="cf-display font-black text-4xl cf-tnum" style={{ color: "var(--cf-ink)" }}>
+        {tick.toLocaleString()}
+      </div>
+      <div className="flex items-center gap-1.5">
+        <span className="relative flex w-1.5 h-1.5">
+          {!reduced && <span className="cf-ping absolute inline-flex w-full h-full rounded-full" style={{ background: "var(--cf-green)" }} />}
+          <span className="relative inline-flex w-1.5 h-1.5 rounded-full" style={{ background: "var(--cf-green)" }} />
+        </span>
+        <span className="cf-accent text-[9px] cf-dim2">TICKS SIMULATED</span>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * In-memory sessions: the venue graph itself, with nodes lighting in sequence and no store
+ * behind them. Deliberately abstract — the claim is about what is *absent*, so the picture
+ * shows the graph standing alone rather than inventing a database icon to cross out.
+ */
+function DemoGraph() {
+  const reduced = usePrefersReducedMotion();
+  const [lit, setLit] = useState(reduced ? 5 : 0);
+
+  useEffect(() => {
+    if (reduced) return;
+    const t = setInterval(() => setLit((n) => (n + 1) % 7), 700);
+    return () => clearInterval(t);
+  }, [reduced]);
+
+  const nodes = [
+    { x: 22, y: 46 }, { x: 60, y: 20 }, { x: 60, y: 68 },
+    { x: 104, y: 34 }, { x: 104, y: 72 }, { x: 142, y: 48 },
+  ];
+  const edges = [[0, 1], [0, 2], [1, 3], [2, 4], [3, 5], [4, 5], [1, 2]];
+
+  return (
+    <div className="h-full flex items-center justify-center" aria-hidden="true">
+      <svg viewBox="0 0 164 92" className="w-full max-w-[200px] h-full">
+        {edges.map(([a, b], i) => (
+          <line key={i} x1={nodes[a].x} y1={nodes[a].y} x2={nodes[b].x} y2={nodes[b].y}
+            stroke="var(--cf-line2)" strokeWidth="1.5" />
+        ))}
+        {nodes.map((n, i) => (
+          <motion.circle key={i} cx={n.x} cy={n.y} r="6"
+            animate={{
+              fill: i < lit ? "var(--cf-orange)" : "var(--cf-panel)",
+              opacity: i < lit ? 1 : 0.6,
+            }}
+            transition={{ duration: 0.4 }}
+            stroke="var(--cf-line2)" strokeWidth="1.5" />
+        ))}
+      </svg>
+    </div>
+  );
+}
+
+/** The three role portals, cycling — the same data, three different views. */
+function DemoPortals() {
+  const reduced = usePrefersReducedMotion();
+  const [active, setActive] = useState(0);
+  const roles = Object.values(ROLES);
+
+  useEffect(() => {
+    if (reduced) return;
+    const t = setInterval(() => setActive((a) => (a + 1) % 3), 1500);
+    return () => clearInterval(t);
+  }, [reduced]);
+
+  return (
+    <div className="h-full flex items-center justify-center gap-3" aria-hidden="true">
+      {roles.map((r, i) => (
+        <motion.div key={r.key} className="w-12 h-12 rounded-xl flex items-center justify-center"
+          animate={{
+            scale: active === i ? 1.12 : 1,
+            backgroundColor: active === i
+              ? `color-mix(in oklab, ${r.color} 24%, transparent)`
+              : "rgba(255,255,255,0.04)",
+          }}
+          transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}>
+          <r.Icon className="w-5 h-5" strokeWidth={2}
+            style={{ color: active === i ? r.color : "var(--cf-dim2)" }} />
+        </motion.div>
+      ))}
+    </div>
+  );
+}
+
+/** A bento tile: spotlight surface + the shared tile material, with an optional accent. */
+function Bento({ color, className = "", children, ...rest }) {
+  return (
+    <Spotlight color={color} className={`cf-bento rounded-2xl ${className}`} {...rest}>
+      {children}
+    </Spotlight>
   );
 }
 
@@ -1252,7 +2215,9 @@ function SectionHeading({ eyebrow, title, lede, center = false }) {
 function PageHeader({ eyebrow, title, lede }) {
   return (
     <section className="relative border-b cf-hairline">
-      <div className="relative max-w-7xl mx-auto px-6 pt-32 pb-16">
+      {/* Top padding clears the fixed header, which is a 64px bar plus the ~48px route strip
+          on large screens and just the bar below that. */}
+      <div className="relative max-w-7xl mx-auto px-6 pt-32 lg:pt-40 pb-16">
         <Reveal>
           <Eyebrow>{eyebrow}</Eyebrow>
           <h1 className="cf-display font-black uppercase tracking-tight mt-5 mb-5" style={{ fontSize: "clamp(2.5rem, 5.5vw, 4rem)", lineHeight: 1.02 }}>
@@ -1271,6 +2236,7 @@ function PageHeader({ eyebrow, title, lede }) {
 
 const NAV = [
   { path: "/", label: "Home" },
+  { path: "/how", label: "How it works" },
   { path: "/platform", label: "Platform" },
   { path: "/intelligence", label: "Intelligence" },
   { path: "/results", label: "Results" },
@@ -1300,7 +2266,7 @@ function useHashRoute() {
    Header
    ========================================================================== */
 
-function Header({ route, navigate, session, signOut }) {
+function Header({ route, navigate, session, signOut, inPortal = false }) {
   const [solid, setSolid] = useState(false);
   const [open, setOpen] = useState(false);
   useEffect(() => {
@@ -1311,68 +2277,107 @@ function Header({ route, navigate, session, signOut }) {
   useEffect(() => setOpen(false), [route]);
   const go = (e, p) => { e.preventDefault(); navigate(p); };
 
+  const lifted = solid || open;
+
   return (
-    <header className="fixed top-0 left-0 right-0 z-50 transition-all duration-300"
-      style={{
-        background: solid || open ? "rgba(5,7,11,0.86)" : "transparent",
-        borderBottom: `1px solid ${solid || open ? "var(--cf-line)" : "transparent"}`,
-        backdropFilter: solid || open ? "blur(14px) saturate(140%)" : "none",
-      }}>
-      <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between gap-6">
-        <a href="#/" onClick={(e) => go(e, "/")} className="flex items-center gap-2.5 cf-focus rounded shrink-0">
-          <span className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: "linear-gradient(135deg, var(--cf-red), var(--cf-orange))" }}>
-            <Flag className="w-4 h-4 text-white" strokeWidth={2.5} />
-          </span>
-          <span className="cf-display font-bold uppercase tracking-wide text-base leading-none">
-            Crowd Flow<span className="cf-dim font-normal"> Optimiser</span>
-          </span>
-        </a>
-
-        <nav className="hidden lg:flex items-center gap-8">
-          {NAV.map((r) => (
-            <a key={r.path} href={`#${r.path}`} onClick={(e) => go(e, r.path)} data-active={route === r.path}
-              className="cf-nav-link cf-accent text-[12px] cf-focus rounded"
-              style={{ color: route === r.path ? "var(--cf-ink)" : "var(--cf-dim)" }}>
-              {r.label.toUpperCase()}
+    // The blur is applied unconditionally and its *opacity* is what animates.
+    // `backdrop-filter` is a discrete property: toggling it between "none" and a blur cannot
+    // transition, so the old version snapped the whole bar on the first scroll tick — which
+    // is what made the header lurch on the way down. Painting the background on a child that
+    // fades keeps the change continuous.
+    <header className="fixed top-0 left-0 right-0 z-50">
+      <div aria-hidden="true" className="absolute inset-0 transition-opacity duration-300"
+        style={{
+          opacity: lifted ? 1 : 0,
+          background: "rgba(5,7,11,0.86)",
+          backdropFilter: "blur(14px) saturate(120%)",
+          WebkitBackdropFilter: "blur(14px) saturate(120%)",
+          borderBottom: "1px solid var(--cf-line)",
+        }} />
+      <ScrollProgress />
+      <div className="relative max-w-7xl mx-auto">
+        <CoreHeaderBar
+          accent="var(--cf-orange)"
+          /* Only a real session produces an identity here. The source component always drew
+             an avatar and "Active now"; on a public page that would tell a logged-out
+             visitor they are signed in.
+             Inside a portal the identity is suppressed entirely: PortalShell renders its own
+             bar with the same account and sign-out directly below this one, and showing both
+             put the same email and avatar on screen twice. */
+          userName={inPortal ? undefined : session?.email}
+          userStatus="Signed in"
+          title={
+            <a href="#/" onClick={(e) => go(e, "/")} className="group flex items-center gap-2.5 cf-focus rounded shrink-0">
+              <span className="transition-transform duration-500 group-hover:rotate-[-8deg] group-hover:scale-105"
+                style={{ transitionTimingFunction: "var(--cf-ease)" }}>
+                <LogoMark size={30} />
+              </span>
+              {/* The source wordmark is italic and tight; this typeface is already condensed,
+                  so tracking-tight on top of it closed the letterforms up. Normal tracking
+                  and an explicit space keep "Crowd Flow Optimiser" legible at 16px. */}
+              <span className="cf-display font-bold uppercase text-base leading-none italic whitespace-nowrap">
+                Crowd Flow&nbsp;<span className="cf-dim font-normal not-italic">Optimiser</span>
+              </span>
             </a>
-          ))}
-        </nav>
+          }
+          right={
+            <>
+              {session ? (
+                !inPortal && (
+                  <button onClick={signOut} className="cf-focus cf-btn-outline rounded-lg px-3.5 py-2 cf-accent text-[10px] hidden lg:block">SIGN OUT</button>
+                )
+              ) : (
+                <div className="hidden lg:flex items-center gap-3">
+                  <a href="#/access" onClick={(e) => go(e, "/access")} className="cf-focus cf-btn-ghost cf-accent text-[11px]">SIGN IN</a>
+                  <Magnetic strength={4}>
+                    <a href="#/access" onClick={(e) => go(e, "/access")} className="cf-focus cf-btn-primary cf-shine rounded-lg px-4 py-2 cf-accent text-[11px] block">
+                      OPEN PORTAL
+                    </a>
+                  </Magnetic>
+                </div>
+              )}
+              <button onClick={() => setOpen((v) => !v)} aria-label={open ? "Close menu" : "Open menu"} aria-expanded={open}
+                className="lg:hidden cf-focus cf-btn-outline rounded-lg w-9 h-9 flex items-center justify-center">
+                {open ? <X className="w-4 h-4" /> : <Menu className="w-4 h-4" />}
+              </button>
+            </>
+          }
+        />
 
-        <div className="hidden lg:flex items-center gap-3 shrink-0">
-          {session ? (
-            <>
-              <span className="cf-mono text-[11px] cf-dim2">{session.email}</span>
-              <button onClick={signOut} className="cf-focus cf-btn-outline rounded-lg px-3.5 py-2 cf-accent text-[11px]">SIGN OUT</button>
-            </>
-          ) : (
-            <>
-              <a href="#/access" onClick={(e) => go(e, "/access")} className="cf-focus cf-btn-ghost cf-accent text-[11px]">SIGN IN</a>
-              <a href="#/access" onClick={(e) => go(e, "/access")} className="cf-focus cf-btn-primary rounded-lg px-4 py-2 cf-accent text-[11px]">
-                OPEN PORTAL
-              </a>
-            </>
-          )}
+        {/* Routes as a segmented strip rather than spaced links. Hidden on small screens,
+            where the drawer below already carries the same destinations. */}
+        <div className="hidden lg:block">
+          {/* At rest the header is transparent over the hero, so the strip drops its own
+              background and rules to match; they fade in together on scroll. */}
+          <CoreStrip accent="var(--cf-orange)" current={route} transparent={!solid && !open}
+            onChange={(href) => navigate(href)}
+            links={NAV.map((r) => ({ name: r.label, href: r.path }))} />
         </div>
-
-        <button onClick={() => setOpen((v) => !v)} aria-label={open ? "Close menu" : "Open menu"} aria-expanded={open}
-          className="lg:hidden cf-focus cf-btn-outline rounded-lg w-9 h-9 flex items-center justify-center">
-          {open ? <X className="w-4 h-4" /> : <Menu className="w-4 h-4" />}
-        </button>
       </div>
 
-      {open && (
-        <div className="lg:hidden border-t cf-hairline px-6 py-4 flex flex-col gap-1">
-          {NAV.map((r) => (
-            <a key={r.path} href={`#${r.path}`} onClick={(e) => go(e, r.path)} className="cf-accent text-sm py-2.5 cf-focus rounded"
-              style={{ color: route === r.path ? "var(--cf-orange)" : "var(--cf-dim)" }}>
-              {r.label.toUpperCase()}
-            </a>
-          ))}
-          <a href="#/access" onClick={(e) => go(e, "/access")} className="cf-focus cf-btn-primary rounded-lg px-4 py-2.5 cf-accent text-[11px] text-center mt-3">
-            OPEN PORTAL
-          </a>
-        </div>
-      )}
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.div key="cf-mobile-nav" className="lg:hidden border-t cf-hairline overflow-hidden"
+            initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.32, ease: [0.16, 1, 0.3, 1] }}>
+            <div className="px-6 py-4 flex flex-col gap-1">
+              {NAV.map((r, i) => (
+                <motion.a key={r.path} href={`#${r.path}`} onClick={(e) => go(e, r.path)}
+                  initial={{ opacity: 0, x: -12 }} animate={{ opacity: 1, x: 0 }}
+                  transition={{ delay: 0.04 * i + 0.05, duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
+                  className="cf-accent text-sm py-2.5 cf-focus rounded flex items-center justify-between"
+                  style={{ color: route === r.path ? "var(--cf-orange)" : "var(--cf-dim)" }}>
+                  {r.label.toUpperCase()}
+                  {route === r.path && <span className="w-1.5 h-1.5 rounded-full" style={{ background: "var(--cf-orange)" }} />}
+                </motion.a>
+              ))}
+              <a href="#/access" onClick={(e) => go(e, "/access")} className="cf-focus cf-btn-primary cf-shine rounded-lg px-4 py-2.5 cf-accent text-[11px] text-center mt-3">
+                OPEN PORTAL
+              </a>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </header>
   );
 }
@@ -1441,86 +2446,424 @@ function ShowcaseNote({ live }) {
   );
 }
 
+/* ----------------------------------------------------------------------------
+   Role card previews.
+
+   One small piece of art per portal, drawn from the same venue vocabulary the app itself
+   uses — zones, walkways, a route, a density ramp. The point is that the card shows what the
+   role actually sees rather than putting a generic icon above a paragraph.
+
+   All three are static SVG: they sit three-up above the fold on the home page, and three
+   more animation loops there would cost more than they add. Motion on this section comes
+   from the hover state instead.
+   -------------------------------------------------------------------------- */
+
+/** Walker: one dot on the map, and the way out. */
+function RolePreviewWalker({ color }) {
+  return (
+    <svg viewBox="0 0 200 110" className="w-full h-full" aria-hidden="true">
+      <g stroke="var(--cf-line2)" strokeWidth="1.5" fill="none" opacity=".55">
+        <path d="M18 74 H70 V34 H128 V74 H182" />
+        <path d="M70 74 V96" /><path d="M128 34 V14" />
+      </g>
+      {/* The route the walker is given, drawn over the plan in the accent. */}
+      <path d="M28 88 Q 52 88 70 74 T 128 34 Q 150 26 172 26" fill="none"
+        stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeDasharray="4 6" />
+      <circle cx="172" cy="26" r="4.5" fill="var(--cf-violet)" />
+      <g>
+        <circle cx="28" cy="88" r="9" fill={color} opacity=".18" />
+        <circle cx="28" cy="88" r="4" fill={color} />
+      </g>
+    </svg>
+  );
+}
+
+/** Client: zones filling, on the density ramp. */
+function RolePreviewClient({ color }) {
+  const zones = [
+    { x: 14, w: 52, d: 0.24 }, { x: 72, w: 44, d: 0.58 },
+    { x: 122, w: 38, d: 0.9 }, { x: 166, w: 22, d: 0.36 },
+  ];
+  return (
+    <svg viewBox="0 0 200 110" className="w-full h-full" aria-hidden="true">
+      {/* Walkways behind the zones, so the fill reads as rooms on a plan. */}
+      <g stroke="var(--cf-line2)" strokeWidth="1.5" opacity=".5">
+        <line x1="10" y1="52" x2="190" y2="52" />
+        <line x1="68" y1="16" x2="68" y2="92" />
+        <line x1="118" y1="16" x2="118" y2="92" />
+      </g>
+      {zones.map((z, i) => {
+        const h = 16 + z.d * 44;
+        return (
+          <g key={i}>
+            <rect x={z.x} y={88 - h} width={z.w} height={h} rx="2"
+              fill={densityColor(z.d)} opacity={0.22 + z.d * 0.42} />
+            <rect x={z.x} y={88 - h} width={z.w} height="2" fill={densityColor(z.d)} />
+          </g>
+        );
+      })}
+      <line x1="10" y1="90" x2="190" y2="90" stroke="var(--cf-line2)" strokeWidth="1.5" />
+    </svg>
+  );
+}
+
+/** Admin: many venues at once, one of them flagged. */
+function RolePreviewAdmin({ color }) {
+  // Deliberately calm apart from one: the admin view is about spotting the exception, and a
+  // grid where every tile is lit says the opposite.
+  const cells = [
+    [0, 0, 0.10], [1, 0, 0.16], [2, 0, 0.08], [3, 0, 0.13],
+    [0, 1, 0.18], [1, 1, 0.94], [2, 1, 0.12], [3, 1, 0.30],
+    [0, 2, 0.11], [1, 2, 0.20], [2, 2, 0.44], [3, 2, 0.09],
+  ];
+  return (
+    <svg viewBox="0 0 200 110" className="w-full h-full" aria-hidden="true">
+      {cells.map(([cx, cy, d], i) => {
+        const x = 24 + cx * 40, y = 16 + cy * 28;
+        const flagged = d > 0.85;
+        return (
+          <g key={i}>
+            <rect x={x} y={y} width="30" height="20" rx="3"
+              fill={flagged ? densityColor(d) : "var(--cf-line2)"}
+              opacity={flagged ? 0.9 : 0.3 + d * 0.5} />
+            {flagged && (
+              <rect x={x - 2.5} y={y - 2.5} width="35" height="25" rx="5"
+                fill="none" stroke={color} strokeWidth="1.5" />
+            )}
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
 function HomePage({ navigate }) {
   const { venue, people, live } = useShowcase();
   return (
     <div className="cf-page-in">
-      <section className="relative px-6 pt-32 pb-20">
-        <div className="max-w-7xl mx-auto text-center">
+      <section className="relative px-6 pt-28 lg:pt-36 pb-16 overflow-hidden">
+        {/* Slow conic wash behind the headline only. Clipped by the section so it never
+            bleeds into the cards below, and sat under the mesh veil so it reads as depth
+            rather than a second competing background. */}
+        <div className="absolute inset-x-0 top-0 h-[70vh] pointer-events-none opacity-70" aria-hidden="true"
+          style={{ maskImage: "radial-gradient(70% 60% at 50% 30%, #000, transparent)", WebkitMaskImage: "radial-gradient(70% 60% at 50% 30%, #000, transparent)" }}>
+          <div className="cf-aurora" />
+        </div>
+
+        <div className="max-w-7xl mx-auto text-center relative">
           <Reveal>
             <a href="#/access" onClick={(e) => { e.preventDefault(); navigate("/access"); }}
-              className="cf-focus cf-accent inline-flex items-center gap-3 text-[11px] cf-chip rounded-full pl-4 pr-3 py-2 mb-10 cf-dim">
-              THREE PORTALS · ONE LIVE MAP <MoveRight className="w-3.5 h-3.5" />
+              className="cf-focus cf-accent group inline-flex items-center gap-3 text-[11px] cf-chip rounded-full pl-4 pr-3 py-2 mb-10 cf-dim hover:border-(--cf-line2) transition-colors">
+              <span className="relative flex w-1.5 h-1.5">
+                <span className="cf-ping absolute inline-flex w-full h-full rounded-full" style={{ background: "var(--cf-orange)" }} />
+                <span className="relative inline-flex w-1.5 h-1.5 rounded-full" style={{ background: "var(--cf-orange)" }} />
+              </span>
+              THREE PORTALS · ONE LIVE MAP
+              <MoveRight className="w-3.5 h-3.5 transition-transform duration-300 group-hover:translate-x-1" />
             </a>
             <h1 className="cf-display font-black uppercase tracking-tight max-w-4xl mx-auto" style={{ fontSize: "clamp(2.5rem, 6.5vw, 5rem)", lineHeight: 1 }}>
               <span className="block"><GradientShimmer gradient="ember">Know where the crowd</GradientShimmer></span>
               <span className="block"><GradientShimmer gradient="ember">is going to break —</GradientShimmer></span>
               <WordCarousel words={["live.", "predictive.", "measurable.", "on every phone."]} />
             </h1>
-            <p className="mt-8 max-w-xl mx-auto leading-relaxed cf-dim" style={{ fontSize: "clamp(1rem, 1.4vw, 1.15rem)" }}>
+            <p className="mt-6 max-w-xl mx-auto leading-relaxed cf-dim" style={{ fontSize: "clamp(1rem, 1.4vw, 1.15rem)" }}>
               Attendees see themselves on the venue map. Organisers see every zone filling in real time.
               We see the whole network — and the bottleneck forming three ticks before it does.
             </p>
-            <div className="mt-10 flex flex-wrap gap-3 justify-center">
-              <button onClick={() => navigate("/access")} className="cf-focus cf-btn-primary rounded-xl px-7 py-3.5 cf-display font-bold uppercase text-sm tracking-wide">
-                Open a portal
-              </button>
-              <button onClick={() => navigate("/platform")} className="cf-focus cf-btn-outline rounded-xl px-7 py-3.5 cf-display font-bold uppercase text-sm tracking-wide">
-                See the platform
-              </button>
+            <div className="mt-8 flex flex-wrap gap-3 justify-center">
+              <Magnetic>
+                <button onClick={() => navigate("/access")} className="cf-focus cf-btn-primary cf-shine rounded-xl px-7 py-3.5 cf-display font-bold uppercase text-sm tracking-wide">
+                  Open a portal
+                </button>
+              </Magnetic>
+              <Magnetic>
+                <button onClick={() => navigate("/platform")} className="cf-focus cf-btn-outline rounded-xl px-7 py-3.5 cf-display font-bold uppercase text-sm tracking-wide">
+                  See the platform
+                </button>
+              </Magnetic>
             </div>
           </Reveal>
 
           <Reveal delay={140}>
-            <div className="mt-16 max-w-5xl mx-auto">
-              <VenueMap venue={venue} people={people} me={null} height={440} />
+            {/* The map is the product, so it gets treated as the hero image: raised on its own
+                plinth with an ember glow under it, and a caption bar that names what is on
+                screen. The glow is behind the frame, never over the map itself — tinting live
+                density data would make the colours lie. */}
+            <div className="mt-12 max-w-5xl mx-auto relative">
+              <div className="absolute -inset-x-8 -bottom-6 h-24 pointer-events-none opacity-60" aria-hidden="true"
+                style={{ background: "radial-gradient(60% 100% at 50% 100%, rgba(225,6,0,.45), transparent 70%)", filter: "blur(28px)" }} />
+              <div className="relative rounded-3xl p-2 cf-card-solid" style={{ boxShadow: "var(--cf-shadow-lg)" }}>
+                <div className="flex items-center justify-between px-3 py-2">
+                  <div className="flex items-center gap-1.5" aria-hidden="true">
+                    {["var(--cf-red)", "var(--cf-amber)", "var(--cf-green)"].map((c) => (
+                      <span key={c} className="w-2.5 h-2.5 rounded-full" style={{ background: c, opacity: 0.55 }} />
+                    ))}
+                  </div>
+                  <span className="cf-mono text-[10px] cf-dim2 tracking-widest">{venue.name?.toUpperCase() ?? "VENUE"}</span>
+                  <ConnectionPill connected={live} status={live ? "RUNNING" : "CREATED"} />
+                </div>
+                <div className="rounded-2xl overflow-hidden">
+                  <VenueMap venue={venue} people={people} me={null} height={440} />
+                </div>
+              </div>
               <ShowcaseNote live={live} />
             </div>
           </Reveal>
         </div>
+
+        <Reveal delay={220}>
+          <div className="mt-16 max-w-5xl mx-auto">
+            <Ticker items={[
+              "PREDICTIVE CONGESTION MODEL", "2,500 AGENTS PER RUN", "~100MS TICK",
+              "GRAPH-AWARE REROUTING", "PAIRED BASELINE SIMULATION", "THREE ROLE PORTALS",
+              "LIVE WEBSOCKET STREAM", "NO DATABASE REQUIRED",
+            ]} />
+          </div>
+        </Reveal>
       </section>
 
       <section className="max-w-7xl mx-auto px-6 py-20 border-t cf-hairline">
         <Reveal><SectionHeading eyebrow="WHO IT'S FOR" title="Three views of the same venue" lede="Same live data, three very different jobs — and each portal only ever shows what that role should see." center /></Reveal>
-        <div className="grid md:grid-cols-3 gap-6">
+
+        {/* Role cards.
+         *
+         * These used to be an icon tile above four stacked lines of text — the same shape as
+         * every other feature card on the internet, and nothing in them said what this
+         * product is. Each card now *shows* its role instead of only describing it: the
+         * walker gets a single dot with a route out, the client gets zones filling, the admin
+         * gets a grid of venues. The art is the same venue graph the app draws, so the card
+         * previews the thing you get by clicking it.
+         *
+         * The oversized index numeral and the full-bleed footer bar give the three a
+         * deliberate reading order and a real click target, rather than a text link.
+         */}
+        <div className="grid md:grid-cols-3 gap-5">
           {[
-            { Icon: Ticket, role: "Walker", t: "Attendees", d: "Enter a venue ID, see yourself on the map, find the nearest clear exit or water point.", to: "/login/walker", c: "var(--cf-blue-hi)" },
-            { Icon: Building2, role: "Client", t: "Organisers", d: "Upload your floor plan, manage halls and capacity, watch occupancy fill zone by zone.", to: "/login/client", c: "var(--cf-orange)" },
-            { Icon: UserCog, role: "Admin", t: "Operations", d: "Every venue, every layout, every bottleneck — cross-venue monitoring and analysis.", to: "/login/admin", c: "var(--cf-red)" },
-          ].map(({ Icon, role, t, d, to, c }, i) => (
-            <Reveal key={role} delay={i * 80}>
-              <button onClick={() => navigate(to)} className="cf-focus cf-card cf-lift rounded-2xl p-7 text-left w-full h-full">
-                <span className="w-11 h-11 rounded-xl flex items-center justify-center mb-5" style={{ background: `color-mix(in oklab, ${c} 18%, transparent)` }}>
-                  <Icon className="w-5 h-5" style={{ color: c }} strokeWidth={2} />
+            { n: "01", Preview: RolePreviewWalker, role: "Walker", t: "Attendees", d: "See yourself on the venue map and get the nearest clear way out.", to: "/login/walker", c: "var(--cf-blue-hi)" },
+            { n: "02", Preview: RolePreviewClient, role: "Client", t: "Organisers", d: "Upload a floor plan and watch occupancy fill zone by zone.", to: "/login/client", c: "var(--cf-orange)" },
+            { n: "03", Preview: RolePreviewAdmin, role: "Admin", t: "Operations", d: "Every venue, every layout, every bottleneck, on one board.", to: "/login/admin", c: "var(--cf-red)" },
+          ].map(({ n, Preview, role, t, d, to, c }, i) => (
+            <Reveal key={role} delay={i * 80} className="h-full">
+              <Spotlight as="button" color={c} onClick={() => navigate(to)}
+                className="cf-focus cf-rolecard group w-full h-full text-left flex flex-col">
+
+                {/* Live art. Sits in its own bay with the accent bleeding up from the floor,
+                    so the colour arrives as light rather than as a filled swatch. */}
+                <span className="cf-rolecard-art" style={{ "--accent": c }}>
+                  <span className="cf-rolecard-glow" aria-hidden="true" />
+                  <Preview color={c} />
+                  <span aria-hidden="true" className="cf-rolecard-index cf-display">{n}</span>
                 </span>
-                <div className="cf-accent text-[10px] cf-dim2 mb-1">{role.toUpperCase()} PORTAL</div>
-                <div className="cf-display font-bold uppercase text-xl tracking-wide mb-2">{t}</div>
-                <p className="text-sm cf-dim leading-relaxed mb-4">{d}</p>
-                <span className="inline-flex items-center gap-1.5 cf-accent text-[11px]" style={{ color: c }}>
-                  ENTER <ArrowRight className="w-3.5 h-3.5" />
+
+                <span className="flex-1 flex flex-col px-6 pt-5 pb-6">
+                  <span className="cf-accent text-[10px] cf-dim2 mb-1.5 block">{role.toUpperCase()} PORTAL</span>
+                  <span className="cf-display font-black uppercase text-2xl tracking-tight leading-none mb-2.5 block">{t}</span>
+                  <span className="text-sm cf-dim leading-relaxed block">{d}</span>
                 </span>
-              </button>
+
+                <span className="cf-rolecard-foot" style={{ "--accent": c }}>
+                  <span className="cf-accent text-[11px]" style={{ color: c }}>ENTER PORTAL</span>
+                  <ArrowRight className="w-4 h-4 transition-transform duration-300 group-hover:translate-x-1.5" style={{ color: c }} />
+                </span>
+              </Spotlight>
             </Reveal>
           ))}
         </div>
       </section>
 
-      <section className="cf-panel border-y cf-hairline">
-        <div className="max-w-7xl mx-auto px-6 py-16">
-          <Reveal>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-px rounded-2xl overflow-hidden" style={{ background: "var(--cf-line)" }}>
-              {[
-                { v: "2,500", l: "AGENTS PER RUN" }, { v: "~100ms", l: "TICK INTERVAL" },
-                { v: "28%", l: "LESS TIME CRITICAL", c: "var(--cf-green)" }, { v: "0", l: "DATABASES REQUIRED" },
-              ].map((s) => (
-                <div key={s.l} className="px-6 py-8" style={{ background: "var(--cf-card)" }}>
-                  <div className="cf-display font-black text-3xl mb-1" style={{ color: s.c || "var(--cf-ink)" }}>{s.v}</div>
-                  <div className="cf-accent text-[11px] cf-dim2">{s.l}</div>
+      {/* Capability bento. Asymmetric on purpose: the prediction claim is the one that
+          differentiates the product, so it gets the wide tile and the others read as
+          supporting evidence rather than a flat list of equals. */}
+      <section className="max-w-7xl mx-auto px-6 py-20 border-t cf-hairline">
+        <Reveal><SectionHeading eyebrow="WHAT IT DOES" title="Built to see it coming"
+          lede="A threshold tells you a zone is full. The point of this system is to tell you which zone is about to be." center /></Reveal>
+
+        {/* Six columns on desktop so tiles can be 2- or 3-wide and the row rhythm changes down
+            the grid. Each tile is a live demo above its label: the animation is the evidence
+            for the claim, not decoration beside it. */}
+        <div className="grid grid-cols-1 md:grid-cols-6 gap-4 md:auto-rows-[13rem]">
+          {[
+            {
+              d: 0, span: "md:col-span-2 md:row-span-2", color: "var(--cf-orange)", Demo: DemoPropagation,
+              Icon: Radio, t: "Predicts, not reports",
+              p: "Congestion propagates along the venue's own walkway graph, so a quiet zone about to be hit by an overrunning neighbour is flagged before it fills — not once it already has.",
+            },
+            {
+              d: 80, span: "md:col-span-2", color: "var(--cf-blue-hi)", Demo: DemoRoute,
+              Icon: Navigation, t: "Routes around it",
+              p: "Paths weighted by live congestion — around the jam, not through it.",
+            },
+            {
+              d: 160, span: "md:col-span-2 md:row-span-2", color: "var(--cf-green)", Demo: DemoBaseline,
+              Icon: ShieldCheck, t: "Proves it worked",
+              p: "A hidden baseline runs the same crowd and seed with rerouting off, so the before/after is measured, not estimated.",
+            },
+            {
+              d: 240, span: "md:col-span-2", color: "var(--cf-amber)", Demo: DemoTick,
+              Icon: Activity, t: "Runs in real time",
+              p: "Thousands of agents, roughly ten ticks a second.",
+            },
+            {
+              d: 320, span: "md:col-span-3", color: "var(--cf-blue-hi)", Demo: DemoPortals,
+              Icon: Users, t: "Three views, one venue",
+              p: "Attendees, organisers and operations each see exactly what their job needs — and nothing beyond it.",
+            },
+            {
+              d: 400, span: "md:col-span-3", color: "var(--cf-orange)", Demo: DemoGraph,
+              Icon: Layers, t: "No database required",
+              p: "Sessions run in memory against the venue graph, so there is nothing to provision before a demo.",
+            },
+          ].map(({ d, span, color, Demo, Icon, t, p }) => (
+            <Reveal key={t} delay={d} className={span}>
+              <Bento color={color} className="p-6 h-full flex flex-col">
+                <div className="flex-1 min-h-0"><Demo /></div>
+                <div className="mt-4">
+                  <div className="cf-display font-bold uppercase text-lg tracking-wide mb-1.5 flex items-center gap-2">
+                    <Icon className="w-4 h-4 shrink-0" style={{ color }} strokeWidth={2} />
+                    {t}
+                  </div>
+                  <p className="text-sm cf-dim leading-relaxed">{p}</p>
                 </div>
+              </Bento>
+            </Reveal>
+          ))}
+        </div>
+      </section>
+
+      <section className="relative">
+        {/* Fades to nothing at both ends instead of butting into a hard edge. */}
+        <span aria-hidden="true" className="block max-w-7xl mx-auto cf-rule" />
+        <div className="max-w-7xl mx-auto px-6 py-16 relative">
+          <Reveal>
+            <div className="grid grid-cols-2 md:grid-cols-4 rounded-2xl overflow-hidden cf-statband">
+              {[
+                { to: 2500, suffix: "", l: "AGENTS PER RUN" },
+                { to: 100, prefix: "~", suffix: "ms", l: "TICK INTERVAL" },
+                { to: 28, suffix: "%", l: "LESS TIME CRITICAL", c: "var(--cf-green)" },
+                { to: 0, suffix: "", l: "DATABASES REQUIRED" },
+              ].map((s) => (
+                <Spotlight key={s.l} className="px-6 py-8 cf-statcell">
+                  <div className="cf-display font-black text-3xl mb-1 cf-tnum" style={{ color: s.c || "var(--cf-ink)" }}>
+                    <CountOnView value={s.to} prefix={s.prefix} suffix={s.suffix} />
+                  </div>
+                  <div className="cf-accent text-[11px] cf-dim2">{s.l}</div>
+                </Spotlight>
               ))}
             </div>
           </Reveal>
         </div>
+        <span aria-hidden="true" className="block max-w-7xl mx-auto cf-rule" />
+      </section>
+
+      <section className="max-w-7xl mx-auto px-6 py-24 text-center">
+        <Reveal>
+          <h2 className="cf-display font-black uppercase tracking-tight mb-5" style={{ fontSize: "clamp(1.9rem, 4vw, 3rem)", lineHeight: 1.05 }}>
+            <GradientShimmer gradient="ember">Open a portal and watch a venue fill</GradientShimmer>
+          </h2>
+          <p className="cf-dim max-w-xl mx-auto leading-relaxed mb-8">
+            Three roles, one live map. Start a session from the client portal and the whole
+            system — map, timing tower, before/after — comes alive against it.
+          </p>
+          <Magnetic>
+            <button onClick={() => navigate("/access")} className="cf-focus cf-btn-primary cf-shine rounded-xl px-8 py-4 cf-display font-bold uppercase text-sm tracking-wide">
+              Choose your portal
+            </button>
+          </Magnetic>
+        </Reveal>
+      </section>
+    </div>
+  );
+}
+
+/**
+ * How it works — the end-to-end story.
+ *
+ * The other marketing pages each cover one slice (the board, the models, the numbers). Nothing
+ * previously walked a reader from "I have a floor plan" to "a marshal is reading an instruction",
+ * which is the question every first-time visitor actually arrives with.
+ */
+function HowItWorksPage({ navigate }) {
+  const steps = [
+    { n: "01", Icon: Upload, c: "var(--cf-orange)", t: "Upload the floor plan",
+      d: "A flat 2D image is all that is needed. No CAD, no survey, no site visit.",
+      note: "CLIENT PORTAL · ONE IMAGE" },
+    { n: "02", Icon: Network, c: "var(--cf-orange)", t: "AI traces it into a graph",
+      d: "Halls, corridors, gates and the walkable edges between them become a routable network — the structure everything downstream reasons over.",
+      note: "AUTOMATED TRACING · EDITABLE" },
+    { n: "03", Icon: Users, c: "var(--cf-blue-hi)", t: "Attendees check in",
+      d: "A venue code on your signage puts each device on the map. Only anonymous position inside the geofence is ever used.",
+      note: "WALKER PORTAL · VENUE CODE" },
+    { n: "04", Icon: Cpu, c: "var(--cf-blue-hi)", t: "The model looks ahead",
+      d: "Density, trend and history propagate across the graph, so risk is predicted at a zone's neighbours before that zone itself is full.",
+      note: "CONGESTION-PROPAGATION GNN" },
+    { n: "05", Icon: Navigation, c: "var(--cf-amber)", t: "Routes bend around the jam",
+      d: "Paths are weighted by live congestion, so the way out an attendee is shown goes around the crush rather than into it.",
+      note: "PER-ATTENDEE REROUTING" },
+    { n: "06", Icon: Radio, c: "var(--cf-red)", t: "Operators get a sentence",
+      d: "Density vectors become the actual line a marshal can act on — hold intake here, stage arrivals there.",
+      note: "GENERATED ADVISORY" },
+  ];
+
+  return (
+    <div className="cf-page-in">
+      <PageHeader eyebrow="HOW IT WORKS" title="Floor plan to instruction"
+        lede="Six steps from a flat image of your venue to a sentence a marshal can act on — and the point at which each one stops being a guess." />
+
+      <section className="max-w-5xl mx-auto px-6 py-20">
+        {/* A vertical spine with the steps hung off it. The rail is drawn behind the markers
+            and stops short at the last one, so the sequence reads as finite rather than
+            continuing off the bottom of the page. */}
+        <div className="relative">
+          <span aria-hidden="true" className="absolute left-[19px] top-3 bottom-14 w-px hidden sm:block"
+            style={{ background: "linear-gradient(180deg, var(--cf-orange), var(--cf-blue-hi), var(--cf-red), transparent)", opacity: 0.45 }} />
+
+          <div className="flex flex-col gap-4">
+            {steps.map(({ n, Icon, c, t, d, note }, i) => (
+              <Reveal key={n} delay={i * 70}>
+                <div className="flex gap-5 items-start">
+                  <span className="relative z-10 w-10 h-10 rounded-full shrink-0 hidden sm:flex items-center justify-center cf-card-solid"
+                    style={{ borderColor: c }}>
+                    <Icon className="w-4 h-4" style={{ color: c }} strokeWidth={2} />
+                  </span>
+                  <Spotlight color={c} className="cf-bento rounded-2xl p-6 flex-1">
+                    <div className="flex items-center gap-3 mb-2">
+                      <span className="cf-mono text-[11px]" style={{ color: c }}>{n}</span>
+                      <span className="cf-display font-bold uppercase text-lg tracking-wide">{t}</span>
+                    </div>
+                    <p className="text-sm cf-dim leading-relaxed mb-3">{d}</p>
+                    <span className="cf-accent text-[10px] cf-dim2">{note}</span>
+                  </Spotlight>
+                </div>
+              </Reveal>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section className="max-w-7xl mx-auto px-6 pb-24">
+        <Reveal>
+          <Spotlight className="cf-bento rounded-2xl p-8 text-center">
+            <div className="cf-display font-black uppercase text-2xl tracking-tight mb-3">
+              <GradientShimmer gradient="ember">See it running</GradientShimmer>
+            </div>
+            <p className="cf-dim text-sm leading-relaxed max-w-xl mx-auto mb-7">
+              Start a session from the client portal and every surface on this site — the live board,
+              the timing tower, the before/after — starts reporting against it.
+            </p>
+            <div className="flex flex-wrap gap-3 justify-center">
+              <Magnetic>
+                <button onClick={() => navigate("/access")} className="cf-focus cf-btn-primary cf-shine rounded-xl px-7 py-3.5 cf-display font-bold uppercase text-sm tracking-wide">
+                  Open a portal
+                </button>
+              </Magnetic>
+              <Magnetic>
+                <button onClick={() => navigate("/platform")} className="cf-focus cf-btn-outline rounded-xl px-7 py-3.5 cf-display font-bold uppercase text-sm tracking-wide">
+                  See the live board
+                </button>
+              </Magnetic>
+            </div>
+          </Spotlight>
+        </Reveal>
       </section>
     </div>
   );
@@ -1543,9 +2886,11 @@ function PlatformPage({ navigate }) {
           <ShowcaseNote live={live} />
         </div>
         <div className="grid lg:grid-cols-[1fr_20rem] gap-6">
-          <VenueMap venue={venue} people={people} me={null} height={520} onSelectHall={setSel} selectedHall={sel} />
+          <div className="rounded-2xl overflow-hidden" style={{ boxShadow: "var(--cf-shadow-md)" }}>
+            <VenueMap venue={venue} people={people} me={null} height={520} onSelectHall={setSel} selectedHall={sel} />
+          </div>
           <div className="flex flex-col gap-4">
-            <div className="cf-card rounded-2xl p-5">
+            <Spotlight className="cf-bento rounded-2xl p-5">
               <div className="cf-accent text-[10px] cf-dim2 mb-3">SELECTED ZONE</div>
               {hall ? (
                 <>
@@ -1562,18 +2907,18 @@ function PlatformPage({ navigate }) {
               ) : (
                 <p className="text-sm cf-dim leading-relaxed">Tap any zone on the map to inspect its live occupancy and status.</p>
               )}
-            </div>
-            <div className="cf-card rounded-2xl p-5 flex-1">
+            </Spotlight>
+            <Spotlight className="cf-bento rounded-2xl p-5 flex-1">
               <div className="cf-accent text-[10px] cf-dim2 mb-3">LIVE COUNTS</div>
               <div className="flex flex-col gap-3">
                 {[["Inside venue", people.length * 20], ["Capacity", venue.capacity], ["Zones flagged", venue.halls.filter((h) => h.density > 0.7).length]].map(([l, v]) => (
-                  <div key={l} className="flex items-center justify-between">
+                  <div key={l} className="flex items-center justify-between py-1 border-b cf-hairline last:border-0">
                     <span className="text-sm cf-dim">{l}</span>
-                    <span className="cf-mono text-sm font-semibold">{v}</span>
+                    <span className="cf-mono text-sm font-semibold cf-tnum">{v}</span>
                   </div>
                 ))}
               </div>
-            </div>
+            </Spotlight>
           </div>
         </div>
       </section>
@@ -1675,7 +3020,7 @@ function IntelligencePage() {
             { Icon: Radio, t: "Advisory Generator", m: "Text generation · density + trend → instruction", b: "Operators read sentences, not density vectors. This turns raw numbers into the line a marshal can act on.", ql: "GENERATED ADVISORY · GATE A", q: "Hold intake and stage arrivals away from Gate A; it is filling faster than it drains." },
           ].map(({ Icon, t, m, b, ql, q }, i) => (
             <Reveal key={t} delay={i * 80}>
-              <div className="cf-card cf-lift rounded-2xl p-7 h-full flex flex-col">
+              <Spotlight color="var(--cf-blue-hi)" className="cf-bento rounded-2xl p-7 h-full flex flex-col">
                 <div className="flex items-center gap-3 mb-5">
                   <span className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: "rgba(77,141,240,0.14)" }}>
                     <Icon className="w-5 h-5 cf-blue-hi" strokeWidth={2} />
@@ -1690,7 +3035,7 @@ function IntelligencePage() {
                   <div className="cf-mono text-[10px] tracking-widest cf-dim2 mb-1">{ql}</div>
                   <p className="text-sm italic leading-relaxed">&ldquo;{q}&rdquo;</p>
                 </div>
-              </div>
+              </Spotlight>
             </Reveal>
           ))}
         </div>
@@ -1700,14 +3045,17 @@ function IntelligencePage() {
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {pipeline.map(({ Icon, t, d }, i) => (
             <Reveal key={t} delay={i * 60}>
-              <div className="cf-card cf-lift rounded-xl p-6 h-full">
-                <div className="flex items-center justify-between mb-4">
-                  <Icon className="w-4 h-4 cf-orange" strokeWidth={2} />
-                  <span className="cf-mono text-[10px] cf-dim2">0{i + 1}</span>
-                </div>
+              {/* The step number is drawn oversized and low-contrast behind the content so the
+                  sequence is readable at a glance without a numeral competing with the title. */}
+              <Spotlight className="cf-bento rounded-xl p-6 h-full relative overflow-hidden">
+                <span aria-hidden="true" className="cf-display font-black absolute -top-3 right-2 leading-none select-none"
+                  style={{ fontSize: "5rem", color: "var(--cf-line)", opacity: 0.55 }}>
+                  {i + 1}
+                </span>
+                <Icon className="w-4 h-4 cf-orange mb-4" strokeWidth={2} />
                 <div className="cf-display font-bold uppercase text-sm tracking-wide mb-1.5">{t}</div>
                 <p className="text-sm cf-dim leading-relaxed">{d}</p>
-              </div>
+              </Spotlight>
             </Reveal>
           ))}
         </div>
@@ -1784,16 +3132,19 @@ function ResultsPage() {
         <div className="grid md:grid-cols-2 gap-6">
           {laps.map(({ l, c, d }, i) => (
             <Reveal key={l} delay={i * 80}>
-              <div className="cf-card cf-lift rounded-2xl p-7">
-                <div className="cf-display font-bold uppercase text-sm tracking-wide mb-6" style={{ color: c }}>{l}</div>
-                <div className="cf-accent text-[11px] cf-dim2 mb-1">CRITICAL NODE-TICKS</div>
-                <div className="cf-mono text-4xl font-bold" style={{ color: c }}>{d.criticalNodeTicks}</div>
-                <div className="grid grid-cols-3 gap-4 pt-5 mt-5 border-t cf-hairline">
-                  <div><div className="text-[11px] cf-mono cf-dim2 mb-1">PEAK</div><div className="cf-mono font-semibold">{Math.round(d.peakDensity * 100)}%</div></div>
-                  <div><div className="text-[11px] cf-mono cf-dim2 mb-1">ZONES</div><div className="cf-mono font-semibold">{d.bottleneckCount}</div></div>
-                  <div><div className="text-[11px] cf-mono cf-dim2 mb-1">EXITED</div><div className="cf-mono font-semibold">{d.exited}</div></div>
+              <Spotlight color={c} className="cf-bento rounded-2xl p-7 h-full">
+                <div className="flex items-center gap-2.5 mb-6">
+                  <span className="w-2 h-2 rounded-full shrink-0" style={{ background: c }} />
+                  <div className="cf-display font-bold uppercase text-sm tracking-wide" style={{ color: c }}>{l}</div>
                 </div>
-              </div>
+                <div className="cf-accent text-[11px] cf-dim2 mb-1">CRITICAL NODE-TICKS</div>
+                <div className="cf-mono text-4xl font-bold cf-tnum" style={{ color: c }}>{d.criticalNodeTicks}</div>
+                <div className="grid grid-cols-3 gap-4 pt-5 mt-5 border-t cf-hairline">
+                  <div><div className="text-[11px] cf-mono cf-dim2 mb-1">PEAK</div><div className="cf-mono font-semibold cf-tnum">{Math.round(d.peakDensity * 100)}%</div></div>
+                  <div><div className="text-[11px] cf-mono cf-dim2 mb-1">ZONES</div><div className="cf-mono font-semibold cf-tnum">{d.bottleneckCount}</div></div>
+                  <div><div className="text-[11px] cf-mono cf-dim2 mb-1">EXITED</div><div className="cf-mono font-semibold cf-tnum">{d.exited}</div></div>
+                </div>
+              </Spotlight>
             </Reveal>
           ))}
         </div>
@@ -1807,11 +3158,14 @@ function ResultsPage() {
         <div className="max-w-3xl">
           {faqs.map((f, i) => (
             <Reveal key={f.q} delay={i * 60}>
-              <div className="border-b cf-hairline">
+              <div className="border-b cf-hairline group">
                 <button onClick={() => setOpen(open === i ? -1 : i)} aria-expanded={open === i}
                   className="cf-focus w-full flex items-center justify-between gap-6 py-5 text-left">
-                  <span className="cf-display font-bold uppercase text-base tracking-wide">{f.q}</span>
-                  <ChevronDown className="w-4 h-4 cf-dim shrink-0 transition-transform duration-300" style={{ transform: open === i ? "rotate(180deg)" : "none" }} />
+                  <span className="cf-display font-bold uppercase text-base tracking-wide transition-colors duration-300"
+                    style={{ color: open === i ? "var(--cf-orange)" : undefined }}>{f.q}</span>
+                  <span className="w-7 h-7 rounded-full cf-chip flex items-center justify-center shrink-0 transition-colors duration-300">
+                    <ChevronDown className="w-4 h-4 cf-dim transition-transform duration-300" style={{ transform: open === i ? "rotate(180deg)" : "none" }} />
+                  </span>
                 </button>
                 <div style={{ display: "grid", gridTemplateRows: open === i ? "1fr" : "0fr", transition: "grid-template-rows .35s cubic-bezier(0.16,1,0.3,1)" }}>
                   <div style={{ overflow: "hidden" }}><p className="text-sm cf-dim leading-relaxed pb-5 max-w-2xl">{f.a}</p></div>
@@ -1853,58 +3207,119 @@ const ROLES = {
   },
 };
 
+/**
+ * Portal chooser — supplied pricing-card pattern, ported TSX → JS.
+ *
+ * The structure is kept as-is: a badge and centred header, the headline value under it, a
+ * divider, a checklist of what you get, and a CTA pinned to the bottom of the card so all
+ * three buttons line up regardless of how much text sits above them. One card is `featured`
+ * and carries the ring plus a "most popular" flag.
+ *
+ * Two things are re-pointed at this product. There is no billing here, so the price slot
+ * carries the tagline — the line that actually distinguishes one portal from another. And
+ * the pricing card lists only inclusions; a portal's *exclusions* are the security boundary
+ * and the most important thing on the page, so the checklist keeps both, with the same
+ * green-check / red-cross language used elsewhere in the app.
+ */
 function AccessPage({ navigate }) {
+  // Client is featured: it is the only role that can create a session, so it is the one a
+  // first-time visitor almost always wants.
+  const plans = Object.values(ROLES).map((r) => ({ ...r, featured: r.key === "client" }));
+
   return (
     <div className="cf-page-in">
       <PageHeader eyebrow="PORTALS" title="Pick your way in"
         lede="One platform, three portals. Each sees exactly what its job requires and nothing beyond it — the boundaries below are the actual access model, not a marketing summary." />
 
-      <section className="max-w-7xl mx-auto px-6 py-16">
-        <div className="grid lg:grid-cols-3 gap-6">
-          {Object.values(ROLES).map((r, i) => (
-            <Reveal key={r.key} delay={i * 90}>
-              <div className="cf-card cf-lift rounded-2xl p-7 h-full flex flex-col">
-                <span className="w-12 h-12 rounded-xl flex items-center justify-center mb-5" style={{ background: `color-mix(in oklab, ${r.color} 18%, transparent)` }}>
-                  <r.Icon className="w-6 h-6" style={{ color: r.color }} strokeWidth={2} />
-                </span>
-                <div className="cf-accent text-[10px] cf-dim2 mb-1.5">{r.who.toUpperCase()}</div>
-                <div className="cf-display font-black uppercase text-2xl tracking-tight mb-2">{r.label}</div>
-                <p className="cf-display font-bold uppercase text-sm tracking-wide mb-4" style={{ color: r.color }}>{r.tagline}</p>
-                <p className="text-sm cf-dim leading-relaxed mb-6">{r.blurb}</p>
+      <section className="max-w-6xl mx-auto px-6 py-16">
+        <div className="grid grid-cols-1 min-[900px]:grid-cols-3 gap-6 items-stretch">
+          {plans.map((plan, i) => (
+            <Reveal key={plan.key} delay={i * 90} className="h-full">
+              <Spotlight
+                color={plan.color}
+                aria-label={`${plan.label} portal`}
+                className={`cf-bento group rounded-2xl p-6 h-full flex flex-col text-left ${plan.featured ? "min-[900px]:-translate-y-2" : ""}`}
+                style={plan.featured
+                  ? { borderColor: plan.color, boxShadow: `0 0 0 1px color-mix(in oklab, ${plan.color} 22%, transparent), var(--cf-shadow-lg)` }
+                  : undefined}>
 
-                <div className="mb-5">
-                  <div className="cf-accent text-[10px] cf-dim2 mb-2.5">CAN SEE</div>
-                  <div className="flex flex-col gap-2">
-                    {r.can.map((c) => (
-                      <div key={c} className="flex items-start gap-2 text-sm cf-dim">
-                        <Check className="w-3.5 h-3.5 cf-green shrink-0 mt-0.5" strokeWidth={2.5} />{c}
-                      </div>
-                    ))}
+                {/* Header block — badge, then the tagline in the slot a price would occupy. */}
+                <div className="text-center">
+                  <div className="inline-flex items-center gap-2 flex-wrap justify-center">
+                    <span className="cf-accent text-[10px] rounded-full px-2.5 py-1"
+                      style={plan.featured
+                        ? { background: plan.color, color: "#fff" }
+                        : { background: "rgba(255,255,255,0.06)", color: "var(--cf-dim)", border: "1px solid var(--cf-line)" }}>
+                      {plan.label.toUpperCase()}
+                    </span>
+                    {plan.featured && (
+                      <span className="cf-accent text-[10px] rounded-full px-2.5 py-1"
+                        style={{ background: `color-mix(in oklab, ${plan.color} 16%, transparent)`, color: plan.color }}>
+                        MOST USED
+                      </span>
+                    )}
                   </div>
-                </div>
-                <div className="mb-7">
-                  <div className="cf-accent text-[10px] cf-dim2 mb-2.5">NEVER SEES</div>
-                  <div className="flex flex-col gap-2">
-                    {r.cannot.map((c) => (
-                      <div key={c} className="flex items-start gap-2 text-sm cf-dim2">
-                        <X className="w-3.5 h-3.5 shrink-0 mt-0.5" style={{ color: "var(--cf-red)" }} strokeWidth={2.5} />{c}
-                      </div>
-                    ))}
-                  </div>
+
+                  <span className="mt-5 mb-4 w-12 h-12 rounded-xl mx-auto flex items-center justify-center transition-transform duration-500 group-hover:scale-110"
+                    style={{ background: `color-mix(in oklab, ${plan.color} 18%, transparent)`, transitionTimingFunction: "var(--cf-ease)" }}>
+                    <plan.Icon className="w-6 h-6" style={{ color: plan.color }} strokeWidth={2} />
+                  </span>
+
+                  {/* The role name is the anchor, matching the source where the plan title
+                      leads and the price sits under it as the accent. Reversing that put a
+                      long coloured tagline above the name and the card stopped announcing
+                      which portal it was. */}
+                  <h3 className="cf-display font-black uppercase text-2xl tracking-tight leading-none mb-2">
+                    {plan.label}
+                  </h3>
+                  <p className="cf-display font-bold uppercase text-sm tracking-wide leading-snug mb-2"
+                    style={{ color: plan.color }}>
+                    {plan.tagline}
+                  </p>
+                  <p className="cf-accent text-[10px] cf-dim2">{plan.who.toUpperCase()}</p>
                 </div>
 
-                <button onClick={() => navigate(`/login/${r.key}`)}
-                  className="cf-focus mt-auto rounded-xl px-5 py-3 cf-display font-bold uppercase text-sm tracking-wide w-full transition-all"
-                  style={{ background: `color-mix(in oklab, ${r.color} 16%, transparent)`, border: `1px solid ${r.color}`, color: r.color }}>
-                  Sign in as {r.label}
-                </button>
-              </div>
+                <div className="my-5 border-t cf-hairline" />
+
+                <p className="text-sm cf-dim leading-relaxed mb-5">{plan.blurb}</p>
+
+                <div className="cf-accent text-[10px] cf-dim2 mb-2.5">CAN SEE</div>
+                <ul className="flex flex-col gap-2.5 mb-5">
+                  {plan.can.map((c) => (
+                    <li key={c} className="flex items-start gap-2 text-sm cf-dim">
+                      <CircleCheck className="w-4 h-4 cf-green shrink-0 mt-0.5" strokeWidth={2} aria-hidden="true" />
+                      <span>{c}</span>
+                    </li>
+                  ))}
+                </ul>
+
+                <div className="cf-accent text-[10px] cf-dim2 mb-2.5">NEVER SEES</div>
+                <ul className="flex flex-col gap-2.5">
+                  {plan.cannot.map((c) => (
+                    <li key={c} className="flex items-start gap-2 text-sm cf-dim2">
+                      <CircleX className="w-4 h-4 shrink-0 mt-0.5" style={{ color: "var(--cf-red)" }} strokeWidth={2} aria-hidden="true" />
+                      <span>{c}</span>
+                    </li>
+                  ))}
+                </ul>
+
+                {/* mt-auto keeps every CTA on the same baseline however long the lists run. */}
+                <div className="mt-auto pt-6">
+                  <button onClick={() => navigate(`/login/${plan.key}`)}
+                    className="cf-focus cf-shine rounded-xl px-5 py-3 cf-display font-bold uppercase text-sm tracking-wide w-full transition-all"
+                    style={plan.featured
+                      ? { background: `linear-gradient(100deg, ${plan.color}, color-mix(in oklab, ${plan.color} 62%, var(--cf-orange)))`, color: "#fff" }
+                      : { background: `color-mix(in oklab, ${plan.color} 14%, transparent)`, border: `1px solid ${plan.color}`, color: plan.color }}>
+                    Sign in as {plan.label}
+                  </button>
+                </div>
+              </Spotlight>
             </Reveal>
           ))}
         </div>
       </section>
 
-      <section className="max-w-7xl mx-auto px-6 pb-24">
+      <section className="max-w-6xl mx-auto px-6 pb-24">
         <Reveal>
           <div className="cf-card rounded-2xl p-7 flex items-start gap-4">
             <ShieldCheck className="w-5 h-5 cf-green shrink-0 mt-0.5" strokeWidth={2} />
@@ -1927,89 +3342,573 @@ function AccessPage({ navigate }) {
    Login
    ========================================================================== */
 
-function LoginPage({ roleKey, navigate, signIn }) {
-  const role = ROLES[roleKey] ?? ROLES.walker;
-  const [email, setEmail] = useState("");
-  const [pw, setPw] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
+/**
+ * Sign-in flow.
+ *
+ * Follows the supplied component's shape: a full-screen, centred flow over an animated
+ * background, with the form entering in staged steps and a confirmation beat before the
+ * redirect rather than an instant jump.
+ *
+ * The original drives its background with Three.js + React Three Fiber — about 25MB of
+ * dependency for one screen's backdrop. This app already ships a WebGL shader engine
+ * (@paper-design/shaders-react, ~430KB) doing exactly that job site-wide, so the backdrop
+ * here is the existing <MeshField>, intensified locally. Same effect, no second WebGL stack.
+ */
+/**
+ * The password rules, shown while they are being met rather than after they are broken.
+ *
+ * Every rule is on screen from the first keystroke, ticking off live. The alternative — an
+ * error after submitting — makes choosing a password a guessing game where each attempt
+ * reveals one more requirement, and it is the same amount of markup either way.
+ *
+ * The bar underneath is advisory and deliberately separate from the checklist: the checklist
+ * is what the form enforces, the bar is only a hint that longer is better. A passphrase that
+ * reads "Fair" is still perfectly acceptable to submit.
+ */
+function PasswordRequirements({ password, accent, show }) {
+  const checks = passwordChecks(password);
+  const strength = passwordStrength(password);
+  const problem = passwordError(password);
 
-  const submit = () => {
-    if (!email.trim() || !pw.trim()) { setErr("Enter an email and password to continue."); return; }
-    setErr(""); setBusy(true);
-    setTimeout(() => {
-      setBusy(false);
-      signIn({ role: role.key, email: email.trim() });
-      navigate(`/app/${role.key}`);
-    }, 700);
-  };
+  if (!show) return null;
 
   return (
-    <div className="cf-page-in min-h-screen flex items-center justify-center px-6 py-32">
-      <div className="w-full max-w-md">
-        <Reveal>
-          <button onClick={() => navigate("/access")} className="cf-focus cf-btn-ghost cf-accent text-[11px] inline-flex items-center gap-2 mb-8">
-            <ChevronLeft className="w-3.5 h-3.5" /> ALL PORTALS
-          </button>
-
-          <div className="cf-card rounded-2xl p-8">
-            <span className="w-12 h-12 rounded-xl flex items-center justify-center mb-6" style={{ background: `color-mix(in oklab, ${role.color} 18%, transparent)` }}>
-              <role.Icon className="w-6 h-6" style={{ color: role.color }} strokeWidth={2} />
+    <div className="mb-4 text-left">
+      <div className="flex flex-wrap gap-x-4 gap-y-1.5 justify-center mb-3">
+        {checks.map((c) => (
+          <span key={c.id} className="flex items-center gap-1.5 text-[11px] transition-colors"
+            style={{ color: c.met ? "var(--cf-green, #4ade80)" : "var(--cf-dim2)" }}>
+            <span aria-hidden="true"
+              className="w-3.5 h-3.5 rounded-full flex items-center justify-center shrink-0 transition-all"
+              style={c.met
+                ? { background: "color-mix(in oklab, var(--cf-green, #4ade80) 22%, transparent)" }
+                : { border: "1px solid var(--cf-line2)" }}>
+              {c.met && <Check className="w-2.5 h-2.5" strokeWidth={3.5} />}
             </span>
-            <div className="cf-accent text-[10px] cf-dim2 mb-1.5">{role.who.toUpperCase()}</div>
-            <h1 className="cf-display font-black uppercase text-3xl tracking-tight mb-2">
-              <GradientShimmer gradient="ember">{`${role.label} sign in`}</GradientShimmer>
-            </h1>
-            <p className="text-sm cf-dim leading-relaxed mb-8">{role.tagline}</p>
+            {c.label}
+          </span>
+        ))}
+      </div>
 
-            <div className="flex flex-col gap-4">
-              <label className="block">
-                <span className="cf-accent text-[10px] cf-dim2 block mb-2">EMAIL</span>
+      <div className="flex gap-1 mb-1.5" aria-hidden="true">
+        {[1, 2, 3, 4].map((i) => (
+          <span key={i} className="h-0.5 flex-1 rounded-full transition-all duration-300"
+            style={{
+              background: i <= strength.score
+                ? (strength.score >= 3 ? "var(--cf-green, #4ade80)" : accent)
+                : "var(--cf-line)",
+            }} />
+        ))}
+      </div>
+      {/* One live region for both, so a screen reader hears the strength change and any
+          violation from the same place instead of two competing announcements. */}
+      <p className="text-[10px] cf-accent text-center" aria-live="polite"
+        style={{ color: problem ? "var(--cf-red)" : "var(--cf-dim2)" }}>
+        {problem ?? (strength.label ? strength.label.toUpperCase() : " ")}
+      </p>
+    </div>
+  );
+}
+
+function LoginPage({ roleKey, navigate, signIn }) {
+  const role = ROLES[roleKey] ?? ROLES.walker;
+  const reduced = usePrefersReducedMotion();
+  const [email, setEmail] = useState("");
+  const [step, setStep] = useState("email"); // email → code → (reset) → success
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  // Registration and sign-in share one screen, and the choice is made on the first panel
+  // rather than the second. It decides what the whole flow is, so asking for it after the
+  // email — and after the heading has already committed to one of them — meant people typed a
+  // password into a form that turned out to be doing the other thing.
+  const [wantsNewAccount, setWantsNewAccount] = useState(false);
+
+  // The admin portal is sign-in only. The console is granted per address by the platform
+  // team, so a sign-up form there could only ever collect a password and then refuse it.
+  const allowsSignUp = role.key !== "admin";
+
+  // Derived rather than just hidden. Switching portals from the chips below re-renders this
+  // component in place instead of remounting it, so a "create account" chosen on the client
+  // door would otherwise still be set on arriving at the admin one — with the control that
+  // set it no longer on screen to unset it.
+  const isNewAccount = allowsSignUp && wantsNewAccount;
+  const [err, setErr] = useState("");
+  // Password recovery. `resetCode` is what the user types back; `issuedCode` is the one the
+  // backend handed over directly, which only happens where there is no mail server to send
+  // it through — see api.auth.forgotPassword.
+  const [resetCode, setResetCode] = useState("");
+  const [issuedCode, setIssuedCode] = useState("");
+  const passwordRef = useRef(null);
+  const resetCodeRef = useRef(null);
+  const finishing = useRef(false);
+  // Flipped on one frame after mount so the staged entrance has an initial state to leave.
+  const [entered, setEntered] = useState(false);
+  useEffect(() => {
+    const r = requestAnimationFrame(() => setEntered(true));
+    return () => cancelAnimationFrame(r);
+  }, []);
+  const timers = useRef([]);
+
+  // The two dot-matrix layers. The forward reveal runs from mount; when the code completes
+  // the reverse layer is switched on first and the forward one removed a frame later, so the
+  // grid appears to collapse back out rather than cutting to a second animation.
+  const [forwardCanvas, setForwardCanvas] = useState(true);
+  const [reverseCanvas, setReverseCanvas] = useState(false);
+
+  // Every timeout is tracked so an unmount mid-flow cannot land setState on a dead component
+  // or fire a navigate after the user has already left the page.
+  useEffect(() => () => timers.current.forEach(clearTimeout), []);
+
+  useEffect(() => {
+    if (step !== "code" && step !== "reset") return;
+    const target = () => (step === "reset" ? resetCodeRef.current : passwordRef.current);
+    const t = setTimeout(() => target()?.focus(), reduced ? 0 : 420);
+    timers.current.push(t);
+    return () => clearTimeout(t);
+  }, [step, reduced]);
+
+  const submitEmail = (e) => {
+    e?.preventDefault?.();
+    // Caught here rather than at the backend: a typo in the address cannot succeed, and
+    // finding that out after typing a password on the next panel wastes the whole attempt.
+    const problem = emailError(email);
+    if (problem) { setErr(problem); return; }
+    setErr("");
+    setStep("code");
+  };
+
+  /** Turns any failure from the auth endpoints into one line a person can act on. */
+  const explain = (e, fallback) => (
+    e?.status === 409 ? "That email is already registered — switch to Sign in."
+      : e?.status === 401 ? "Email or password is incorrect."
+        // 403 is the admin gate and the disabled-account case. Both carry a message written
+        // for a reader, so pass it through rather than replacing it with a generic one.
+        : e?.status === 403 ? (e?.message ?? "This portal is not open to that account.")
+          : e?.status === 0 ? "Cannot reach the server. Is the backend running?"
+            : e?.message ?? fallback
+  );
+
+  /**
+   * The shared tail of every successful authentication — register, sign in, or reset.
+   *
+   * The reveal-out is deliberately started only once the backend has accepted the
+   * credentials. Running it optimistically looked better but meant a failed login played a
+   * triumphant "you are in" sequence before dumping the user back to an error.
+   */
+  const celebrate = (res) => {
+    finishing.current = true;
+    setBusy(false);
+
+    // The account's own role wins over whichever portal door was used to get here. The two
+    // now agree for walker and client — signing in at either door moves the account there —
+    // so in practice this only diverges for an admin, who lands in the operations console
+    // whichever entrance they came through.
+    const actualRole = (res.user?.role ?? role.key).toLowerCase();
+
+    setReverseCanvas(true);
+    timers.current.push(setTimeout(() => setForwardCanvas(false), 60));
+    timers.current.push(setTimeout(() => setReverseCanvas(false), reduced ? 150 : 1150));
+    timers.current.push(setTimeout(() => setStep("success"), reduced ? 200 : 1200));
+    timers.current.push(setTimeout(() => {
+      signIn({ role: actualRole, email: res.user?.email ?? email.trim(), id: res.user?.id });
+      navigate(`/app/${actualRole}`);
+    }, reduced ? 600 : 3400));
+  };
+
+  const finish = async () => {
+    if (finishing.current || busy) return;
+    if (isNewAccount) {
+      const problem = passwordError(password);
+      if (problem) { setErr(problem); return; }
+      if (!passwordAcceptable(password)) { setErr("Your password does not meet the requirements yet."); return; }
+    } else if (!password) {
+      setErr("Enter your password.");
+      return;
+    }
+
+    setBusy(true);
+    setErr("");
+    try {
+      celebrate(isNewAccount
+        ? await api.auth.register({ email: email.trim(), password, role: role.key })
+        : await api.auth.login({ email: email.trim(), password, portal: role.key }));
+    } catch (e) {
+      setBusy(false);
+      setErr(explain(e, "Could not sign you in."));
+    }
+  };
+
+  /**
+   * Ask for a reset code and move to the panel that redeems it.
+   *
+   * This always advances, even for an address with no account. The backend answers
+   * identically either way so that this cannot be used to discover which emails are
+   * registered, and a screen that advanced only for real accounts would hand back exactly
+   * the answer the endpoint is careful not to give.
+   */
+  const requestReset = async () => {
+    if (busy) return;
+    setBusy(true);
+    setErr("");
+    try {
+      const res = await api.auth.forgotPassword({ email: email.trim() });
+      setIssuedCode(res?.code ?? "");
+      setResetCode(res?.code ?? "");
+      setPassword("");
+      setBusy(false);
+      setStep("reset");
+    } catch (e) {
+      setBusy(false);
+      setErr(explain(e, "Could not start a password reset."));
+    }
+  };
+
+  const submitReset = async () => {
+    if (finishing.current || busy) return;
+    if (!resetCode.trim()) { setErr("Enter the reset code."); return; }
+    const problem = passwordError(password);
+    if (problem) { setErr(problem); return; }
+    if (!passwordAcceptable(password)) { setErr("Your new password does not meet the requirements yet."); return; }
+
+    setBusy(true);
+    setErr("");
+    try {
+      celebrate(await api.auth.resetPassword({
+        email: email.trim(), code: resetCode.trim(), password,
+      }));
+    } catch (e) {
+      setBusy(false);
+      setErr(explain(e, "Could not reset that password."));
+    }
+  };
+
+  // Setting a password is gated on the policy; using an existing one is not. An account
+  // created before a rule existed is still a valid account, and refusing to let it sign in
+  // would lock people out of exactly the accounts they need to get in to fix.
+  const canSubmitPassword = isNewAccount ? passwordAcceptable(password) : password.length > 0;
+  const canSubmitReset = passwordAcceptable(password) && resetCode.trim().length > 0;
+
+  const backToEmail = () => {
+    finishing.current = false;
+    setStep("email");
+    setPassword("");
+    setResetCode("");
+    setIssuedCode("");
+    setErr("");
+    setReverseCanvas(false);
+    setForwardCanvas(true);
+  };
+
+  // Staged entrance, done in CSS rather than through Motion.
+  //
+  // This used to return fresh `initial`/`animate` objects from inside the render. Motion
+  // treats each of those as a new animation target, and because the sign-in re-renders while
+  // it runs (the shader canvas mounts, `step` changes, AnimatePresence swaps children), some
+  // elements had their entrance restarted and then never finished — they were left stranded
+  // at the initial `opacity: 0`, so parts of the form were simply invisible on screen while
+  // still being present and "visible" to any DOM check.
+  //
+  // A CSS transition driven by one boolean cannot strand: the end state is a plain class, so
+  // however many times this re-renders, the element still settles at opacity 1.
+  const stage = (i) => (reduced ? {} : {
+    style: {
+      opacity: entered ? 1 : 0,
+      transform: entered ? "none" : "translateY(14px)",
+      transition: `opacity .5s var(--cf-ease) ${0.06 * i}s, transform .5s var(--cf-ease) ${0.06 * i}s`,
+    },
+  });
+
+  const slide = (dir) => (reduced
+    ? { initial: { opacity: 0 }, animate: { opacity: 1 }, exit: { opacity: 0 } }
+    : { initial: { opacity: 0, x: dir * 60 }, animate: { opacity: 1, x: 0 },
+        exit: { opacity: 0, x: dir * -60 }, transition: { duration: 0.4, ease: [0.16, 1, 0.3, 1] } });
+
+  // The dot grid is drawn in the role's own colour rather than the source's white, so each
+  // portal's sign-in is identifiable before a word is read.
+  const dotRGB = useMemo(() => ({
+    walker: [77, 141, 240], client: [255, 106, 0], admin: [225, 6, 0],
+  }[role.key] ?? [255, 106, 0]), [role.key]);
+
+  return (
+    <div className="cf-page-in min-h-screen flex flex-col items-center justify-center px-6 py-28 relative">
+      {/* The reveal. Mounted behind everything and masked to a vignette so the dots read as
+          depth at the edges and never compete with the form in the middle. */}
+      <div className="fixed inset-0 z-0 pointer-events-none overflow-hidden" aria-hidden="true">
+        {forwardCanvas && (
+          <CanvasRevealEffect colors={[dotRGB, [255, 255, 255]]} dotSize={6} speed={3} />
+        )}
+        {reverseCanvas && (
+          <CanvasRevealEffect colors={[dotRGB, [255, 255, 255]]} dotSize={6} speed={4} reverse />
+        )}
+        <div className="absolute inset-0"
+          style={{ background: "radial-gradient(circle at center, rgba(5,7,11,.92) 0%, rgba(5,7,11,.55) 45%, rgba(5,7,11,.92) 100%)" }} />
+      </div>
+
+      <div className="w-full max-w-md relative z-10">
+        <AnimatePresence mode="wait">
+          {step === "email" && (
+            <motion.div key="email" {...slide(-1)} className="text-center">
+              <div {...stage(0)} className="flex justify-center mb-6">
+                <span className="w-14 h-14 rounded-2xl flex items-center justify-center"
+                  style={{ background: `color-mix(in oklab, ${role.color} 18%, transparent)` }}>
+                  <role.Icon className="w-7 h-7" style={{ color: role.color }} strokeWidth={2} />
+                </span>
+              </div>
+
+              <div {...stage(1)}>
+                <div className="cf-accent text-[10px] cf-dim2 mb-2">{role.who.toUpperCase()}</div>
+                <h1 className="cf-display font-black uppercase tracking-tight leading-none mb-3"
+                  style={{ fontSize: "clamp(2rem, 5vw, 2.75rem)" }}>
+                  <GradientShimmer gradient="ember">{`${role.label} portal`}</GradientShimmer>
+                </h1>
+                <p className="text-base cf-dim font-light mb-6">{role.tagline}</p>
+              </div>
+
+              {/* The sign-in / create-account choice, made before anything is typed.
+                  A segmented control at the top rather than a link under the password field:
+                  it is the one decision that changes what every input below it means, so it
+                  belongs where it is read first and stays visible while the form is filled.
+
+                  Absent on the admin door rather than present-and-refused: offering a control
+                  whose only outcome is a 403 wastes a password on a door that was never open. */}
+              {allowsSignUp && (
+                <div {...stage(2)} className="flex gap-1 p-1 rounded-full mb-4 mx-auto max-w-xs"
+                  style={{ background: "rgba(5,7,11,0.55)", border: "1px solid var(--cf-line)", backdropFilter: "blur(4px)" }}>
+                  {[["Sign in", false], ["Create account", true]].map(([label, wantsNew]) => (
+                    <button key={label} type="button" aria-pressed={isNewAccount === wantsNew}
+                      onClick={() => { setWantsNewAccount(wantsNew); setErr(""); }}
+                      className="cf-focus flex-1 rounded-full py-2 cf-display font-bold uppercase text-[11px] tracking-wide transition-all"
+                      style={isNewAccount === wantsNew
+                        ? { background: `color-mix(in oklab, ${role.color} 26%, transparent)`, color: "var(--cf-ink)", boxShadow: "inset 0 1px 0 rgba(255,246,240,.09)" }
+                        : { background: "transparent", color: "var(--cf-dim2)" }}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {!allowsSignUp && (
+                <p {...stage(2)} className="cf-accent text-[10px] cf-dim2 mb-4">
+                  SIGN IN ONLY — ACCESS IS GRANTED BY THE PLATFORM TEAM
+                </p>
+              )}
+
+              {/* noValidate hands the check to emailError rather than to the browser.
+                  Chrome's own type=email rule blocks submit before onSubmit ever runs, so a
+                  malformed address produced a native tooltip in the browser's styling and our
+                  own message never appeared — and its rule is looser anyway, accepting
+                  "someone@example" with no dot in the domain. One validator, one message. */}
+              <form {...stage(3)} onSubmit={submitEmail} className="mb-4" noValidate>
                 <div className="relative">
-                  <Mail className="w-4 h-4 cf-dim2 absolute left-3.5 top-1/2 -translate-y-1/2" />
                   <input type="email" value={email} onChange={(e) => setEmail(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && submit()}
                     placeholder={`you@${role.key === "walker" ? "example.com" : role.key === "client" ? "yourvenue.com" : "crowdflow.io"}`}
-                    className="cf-input cf-focus w-full rounded-xl pl-10 pr-4 py-3 text-sm" />
+                    aria-label="Email address"
+                    className="cf-focus w-full rounded-full py-3.5 pl-5 pr-14 text-sm text-center transition-colors"
+                    style={{ background: "rgba(5,7,11,0.55)", border: "1px solid var(--cf-line2)", color: "var(--cf-ink)", backdropFilter: "blur(4px)" }} />
+                  <button type="submit" aria-label="Continue"
+                    className="cf-focus absolute right-2 top-2 w-9 h-9 flex items-center justify-center rounded-full transition-colors"
+                    style={{ background: `color-mix(in oklab, ${role.color} 26%, transparent)`, color: "var(--cf-ink)" }}>
+                    <ArrowRight className="w-4 h-4" />
+                  </button>
                 </div>
-              </label>
+                {err && <p className="text-sm mt-3" style={{ color: "var(--cf-red)" }} role="alert">{err}</p>}
+              </form>
 
-              <label className="block">
-                <span className="cf-accent text-[10px] cf-dim2 block mb-2">PASSWORD</span>
-                <div className="relative">
-                  <Lock className="w-4 h-4 cf-dim2 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                  <input type="password" value={pw} onChange={(e) => setPw(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && submit()}
-                    placeholder="••••••••" className="cf-input cf-focus w-full rounded-xl pl-10 pr-4 py-3 text-sm" />
-                </div>
-              </label>
+              <div {...stage(4)} className="flex items-center gap-4 my-6">
+                <span className="h-px flex-1" style={{ background: "var(--cf-line)" }} />
+                <span className="cf-accent text-[10px] cf-dim2">OR PICK ANOTHER PORTAL</span>
+                <span className="h-px flex-1" style={{ background: "var(--cf-line)" }} />
+              </div>
 
-              {err && <p className="text-sm" style={{ color: "var(--cf-red)" }}>{err}</p>}
+              <div {...stage(5)} className="flex gap-2">
+                {Object.values(ROLES).filter((r) => r.key !== role.key).map((r) => (
+                  <button key={r.key} onClick={() => navigate(`/login/${r.key}`)}
+                    className="cf-focus cf-chip rounded-full px-4 py-2.5 flex-1 transition-colors hover:border-(--cf-line2)">
+                    <span className="cf-display font-bold uppercase text-xs" style={{ color: r.color }}>{r.label}</span>
+                  </button>
+                ))}
+              </div>
 
-              <button onClick={submit} disabled={busy}
-                className="cf-focus cf-btn-primary rounded-xl px-5 py-3.5 cf-display font-bold uppercase text-sm tracking-wide w-full disabled:opacity-60">
-                {busy ? "Signing in…" : `Enter ${role.label} portal`}
-              </button>
-            </div>
-
-            <div className="mt-6 pt-6 border-t cf-hairline">
-              <p className="text-xs cf-dim2 leading-relaxed">
-                Prototype auth — no credentials are checked or stored, and nothing is sent anywhere.
-                Any email and password will open the portal so you can see the interface.
+              <p {...stage(6)} className="text-xs cf-dim2 leading-relaxed mt-10">
+                {/* Says something the notice above it does not, rather than repeating it. */}
+                {allowsSignUp
+                  ? "One account covers both the walker and the client portal — the same credentials open either door, and signing in at one moves you there."
+                  : "If your address has not been granted the console, use the walker or client portal instead — those are self-service and share one account."}
               </p>
-            </div>
-          </div>
+            </motion.div>
+          )}
 
-          <div className="flex gap-2 mt-4">
-            {Object.values(ROLES).filter((r) => r.key !== role.key).map((r) => (
-              <button key={r.key} onClick={() => navigate(`/login/${r.key}`)}
-                className="cf-focus cf-card rounded-xl px-4 py-3 flex-1 text-left hover:cf-lift transition-all">
-                <div className="cf-accent text-[10px] cf-dim2 mb-0.5">SWITCH TO</div>
-                <div className="cf-display font-bold uppercase text-sm" style={{ color: r.color }}>{r.label}</div>
+          {step === "code" && (
+            <motion.div key="code" {...slide(1)} className="text-center">
+              <div {...stage(0)}>
+                <h1 className="cf-display font-black uppercase tracking-tight leading-none mb-3"
+                  style={{ fontSize: "clamp(1.9rem, 4.5vw, 2.5rem)" }}>
+                  <GradientShimmer gradient="ember">{isNewAccount ? "Choose a password" : "Enter your password"}</GradientShimmer>
+                </h1>
+                <p className="text-sm cf-dim font-light mb-1">
+                  {isNewAccount
+                    // The requirements are listed under the field now, so repeating one of
+                    // them here only made the two disagree as the rules changed.
+                    ? "Choose something you do not use elsewhere. This creates your account."
+                    : `Signing in to your existing account, at the ${role.label.toLowerCase()} door.`}
+                </p>
+                <p className="cf-mono text-[11px] cf-dim2 mb-8">{email}</p>
+              </div>
+
+              <div {...stage(1)} className="relative mb-4">
+                <Lock className="w-4 h-4 cf-dim2 absolute left-5 top-1/2 -translate-y-1/2" />
+                <input
+                  ref={passwordRef}
+                  type="password"
+                  value={password}
+                  onChange={(e) => { setPassword(e.target.value); setErr(""); }}
+                  onKeyDown={(e) => { if (e.key === "Enter" && canSubmitPassword) finish(); }}
+                  placeholder="••••••••"
+                  autoComplete={isNewAccount ? "new-password" : "current-password"}
+                  aria-label="Password"
+                  className="cf-focus w-full rounded-full py-3.5 pl-12 pr-5 text-sm text-center transition-colors"
+                  style={{ background: "rgba(5,7,11,0.55)", border: "1px solid var(--cf-line2)", color: "var(--cf-ink)", backdropFilter: "blur(4px)" }} />
+              </div>
+
+              <PasswordRequirements password={password} accent={role.color} show={isNewAccount} />
+
+              {err && <p className="text-sm mb-4" style={{ color: "var(--cf-red)" }} role="alert">{err}</p>}
+
+              <div {...stage(2)} className="flex gap-3">
+                <button onClick={backToEmail} disabled={busy}
+                  className="cf-focus cf-btn-outline rounded-full px-6 py-3 cf-display font-bold uppercase text-xs tracking-wide disabled:opacity-50">
+                  Back
+                </button>
+                <button onClick={() => finish()}
+                  disabled={!canSubmitPassword || busy}
+                  className="cf-focus flex-1 rounded-full py-3 cf-display font-bold uppercase text-xs tracking-wide transition-all disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                  style={canSubmitPassword && !busy
+                    ? { background: `linear-gradient(100deg, ${role.color}, color-mix(in oklab, ${role.color} 62%, var(--cf-orange)))`, color: "#fff" }
+                    : { background: "rgba(255,255,255,0.04)", color: "var(--cf-dim2)", border: "1px solid var(--cf-line)" }}>
+                  {busy && <span className="w-3.5 h-3.5 rounded-full border-2 border-white/35 border-t-white animate-spin" aria-hidden="true" />}
+                  {busy ? "Checking…" : isNewAccount ? "Create account" : "Sign in"}
+                </button>
+              </div>
+
+              {/* Only offered when signing in. During registration there is no account
+                  behind the address yet, so a reset could only ever report nothing found. */}
+              {!isNewAccount && (
+                <button onClick={requestReset} disabled={busy}
+                  className="cf-focus cf-btn-ghost cf-accent text-[10px] mt-6 disabled:opacity-50">
+                  FORGOT PASSWORD?
+                </button>
+              )}
+            </motion.div>
+          )}
+
+          {step === "reset" && (
+            <motion.div key="reset" {...slide(1)} className="text-center">
+              <div {...stage(0)}>
+                <h1 className="cf-display font-black uppercase tracking-tight leading-none mb-3"
+                  style={{ fontSize: "clamp(1.9rem, 4.5vw, 2.5rem)" }}>
+                  <GradientShimmer gradient="ember">Reset your password</GradientShimmer>
+                </h1>
+                <p className="text-sm cf-dim font-light mb-1">
+                  Enter the code, then choose a new password.
+                </p>
+                <p className="cf-mono text-[11px] cf-dim2 mb-6">{email}</p>
+              </div>
+
+              {/* Where the code came from, said plainly.
+                  A screen that claims to have sent an email it did not send is worse than one
+                  that admits the code is on screen. The wording stays general — "not set up
+                  yet" covers both no mail account and a missing app password — because this
+                  is a user-facing panel, not a configuration report. Once delivery works the
+                  backend withholds the code and this branch stops rendering. */}
+              <div {...stage(1)} className="rounded-2xl px-4 py-3 mb-5 text-left cf-bento">
+                <div className="cf-accent text-[10px] cf-dim2 mb-1.5">
+                  {issuedCode ? "EMAIL NOT SET UP YET — CODE SHOWN HERE" : "CHECK YOUR INBOX"}
+                </div>
+                <p className="text-xs cf-dim leading-relaxed">
+                  {issuedCode
+                    ? "Email delivery is not configured, so the code is filled in below instead. Once it is, the code is emailed and never shown on this screen. It expires in 30 minutes and can be used once."
+                    : "If that address has an account, a reset code is on its way. It expires in 30 minutes and can be used once."}
+                </p>
+              </div>
+
+              <div {...stage(2)} className="relative mb-3">
+                <ShieldCheck className="w-4 h-4 cf-dim2 absolute left-5 top-1/2 -translate-y-1/2" />
+                <input
+                  ref={resetCodeRef}
+                  type="text"
+                  value={resetCode}
+                  onChange={(e) => { setResetCode(e.target.value.toUpperCase()); setErr(""); }}
+                  placeholder="RESET CODE"
+                  autoComplete="one-time-code"
+                  spellCheck={false}
+                  maxLength={12}
+                  aria-label="Reset code"
+                  className="cf-focus cf-mono w-full rounded-full py-3.5 pl-12 pr-5 text-sm text-center uppercase tracking-[0.3em] transition-colors"
+                  style={{ background: "rgba(5,7,11,0.55)", border: "1px solid var(--cf-line2)", color: "var(--cf-ink)", backdropFilter: "blur(4px)" }} />
+              </div>
+
+              <div {...stage(3)} className="relative mb-4">
+                <Lock className="w-4 h-4 cf-dim2 absolute left-5 top-1/2 -translate-y-1/2" />
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => { setPassword(e.target.value); setErr(""); }}
+                  onKeyDown={(e) => { if (e.key === "Enter" && canSubmitReset) submitReset(); }}
+                  placeholder="New password"
+                  autoComplete="new-password"
+                  aria-label="New password"
+                  className="cf-focus w-full rounded-full py-3.5 pl-12 pr-5 text-sm text-center transition-colors"
+                  style={{ background: "rgba(5,7,11,0.55)", border: "1px solid var(--cf-line2)", color: "var(--cf-ink)", backdropFilter: "blur(4px)" }} />
+              </div>
+
+              <PasswordRequirements password={password} accent={role.color} show />
+
+              {err && <p className="text-sm mb-4" style={{ color: "var(--cf-red)" }} role="alert">{err}</p>}
+
+              <div {...stage(4)} className="flex gap-3">
+                <button onClick={backToEmail} disabled={busy}
+                  className="cf-focus cf-btn-outline rounded-full px-6 py-3 cf-display font-bold uppercase text-xs tracking-wide disabled:opacity-50">
+                  Back
+                </button>
+                <button onClick={() => submitReset()}
+                  disabled={!canSubmitReset || busy}
+                  className="cf-focus flex-1 rounded-full py-3 cf-display font-bold uppercase text-xs tracking-wide transition-all disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                  style={canSubmitReset && !busy
+                    ? { background: `linear-gradient(100deg, ${role.color}, color-mix(in oklab, ${role.color} 62%, var(--cf-orange)))`, color: "#fff" }
+                    : { background: "rgba(255,255,255,0.04)", color: "var(--cf-dim2)", border: "1px solid var(--cf-line)" }}>
+                  {busy && <span className="w-3.5 h-3.5 rounded-full border-2 border-white/35 border-t-white animate-spin" aria-hidden="true" />}
+                  {busy ? "Saving…" : "Set new password"}
+                </button>
+              </div>
+
+              <button onClick={requestReset} disabled={busy}
+                className="cf-focus cf-btn-ghost cf-accent text-[10px] mt-6 disabled:opacity-50">
+                SEND A NEW CODE
               </button>
-            ))}
-          </div>
-        </Reveal>
+            </motion.div>
+          )}
+
+          {step === "success" && (
+            <motion.div key="success" className="text-center"
+              initial={reduced ? false : { opacity: 0, y: 24 }} animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}>
+              <h1 className="cf-display font-black uppercase tracking-tight leading-none mb-3"
+                style={{ fontSize: "clamp(2rem, 5vw, 2.75rem)" }}>
+                <GradientShimmer gradient="ember">You&rsquo;re in</GradientShimmer>
+              </h1>
+              <p className="text-base cf-dim font-light">Opening the {role.label.toLowerCase()} portal…</p>
+
+              <motion.div className="py-10"
+                initial={reduced ? false : { scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
+                transition={{ duration: 0.4, delay: reduced ? 0 : 0.2 }}>
+                <div className="mx-auto w-16 h-16 rounded-full flex items-center justify-center"
+                  style={{ background: `linear-gradient(140deg, ${role.color}, color-mix(in oklab, ${role.color} 55%, var(--cf-orange)))` }}>
+                  <Check className="w-8 h-8 text-white" strokeWidth={3} />
+                </div>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
     </div>
   );
@@ -2022,40 +3921,49 @@ function LoginPage({ roleKey, navigate, signIn }) {
 function PortalShell({ role, session, navigate, signOut, tabs, active, setActive, children }) {
   const r = ROLES[role];
   return (
-    <div className="cf-page-in pt-24 pb-20">
-      <div className="max-w-7xl mx-auto px-6">
-        <div className="flex flex-wrap items-center justify-between gap-4 mb-8">
-          <div className="flex items-center gap-3">
-            <span className="w-11 h-11 rounded-xl flex items-center justify-center" style={{ background: `color-mix(in oklab, ${r.color} 18%, transparent)` }}>
-              <r.Icon className="w-5 h-5" style={{ color: r.color }} strokeWidth={2} />
-            </span>
-            <div>
-              <div className="cf-accent text-[10px] cf-dim2">{r.who.toUpperCase()}</div>
-              <h1 className="cf-display font-black uppercase text-2xl tracking-tight leading-none">{r.label} portal</h1>
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
-            <span className="cf-mono text-[11px] cf-dim2 hidden sm:inline">{session?.email}</span>
-            <button onClick={() => { signOut(); navigate("/access"); }} className="cf-focus cf-btn-outline rounded-lg px-4 py-2 cf-accent text-[11px]">
-              SIGN OUT
-            </button>
-          </div>
+    <div className="cf-page-in pt-16 lg:pt-28 pb-20">
+      {/* The portal chrome: an app-shell bar carrying the role identity and the signed-in
+          account, with the tab strip directly beneath it. Full-bleed rather than inset in
+          the content column, so it reads as the frame around the portal rather than as the
+          first card inside it. */}
+      <div className="border-b" style={{ borderColor: "var(--cf-line)", background: "rgba(11,16,24,0.72)", backdropFilter: "blur(12px)" }}>
+        <div className="max-w-7xl mx-auto">
+          <CoreHeaderBar
+            accent={r.color}
+            userName={session?.email}
+            userStatus="Active now"
+            title={
+              <>
+                <span className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0"
+                  style={{ background: `color-mix(in oklab, ${r.color} 18%, transparent)` }}>
+                  <r.Icon className="w-4.5 h-4.5" style={{ color: r.color }} strokeWidth={2} />
+                </span>
+                <span className="min-w-0">
+                  <span className="cf-accent text-[9px] cf-dim2 block leading-none mb-1">{r.who.toUpperCase()}</span>
+                  <h1 className="cf-display font-black uppercase text-lg sm:text-xl tracking-tight leading-none italic">
+                    {r.label} portal
+                  </h1>
+                </span>
+              </>
+            }
+            right={
+              <button onClick={() => { signOut(); navigate("/access"); }}
+                className="cf-focus cf-btn-outline rounded-lg px-3.5 py-2 cf-accent text-[10px]">
+                SIGN OUT
+              </button>
+            }
+          />
         </div>
 
         {tabs && (
-          <div className="flex gap-1 mb-8 p-1 rounded-xl cf-card w-fit overflow-x-auto">
-            {tabs.map((t) => (
-              <button key={t} onClick={() => setActive(t)}
-                className="cf-focus cf-accent text-[11px] rounded-lg px-4 py-2.5 whitespace-nowrap transition-all"
-                style={active === t
-                  ? { background: `color-mix(in oklab, ${r.color} 18%, transparent)`, color: r.color }
-                  : { color: "var(--cf-dim2)" }}>
-                {t.toUpperCase()}
-              </button>
-            ))}
+          <div className="max-w-7xl mx-auto">
+            <CoreStrip accent={r.color} current={active} onChange={setActive}
+              links={tabs.map((t) => ({ name: t, href: t }))} />
           </div>
         )}
+      </div>
 
+      <div className="max-w-7xl mx-auto px-6 pt-8">
         {children}
       </div>
     </div>
@@ -3174,22 +5082,24 @@ function Footer({ navigate }) {
       <div className="max-w-7xl mx-auto px-6 py-14">
         <div className="grid md:grid-cols-[2fr_1fr_1fr] gap-10 mb-10">
           <div>
-            <div className="flex items-center gap-2.5 mb-4">
-              <span className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: "linear-gradient(135deg, var(--cf-red), var(--cf-orange))" }}>
-                <Flag className="w-4 h-4 text-white" strokeWidth={2.5} />
-              </span>
-              <span className="cf-display font-bold uppercase tracking-wide text-base">Crowd Flow Optimiser</span>
-            </div>
-            <p className="cf-dim text-sm leading-relaxed max-w-sm">
+            <Wordmark size={32} className="mb-4" />
+            <p className="cf-dim text-sm leading-relaxed max-w-sm mb-5">
               Simulate the venue, predict the bottleneck, route around it — before the queue becomes a crush.
             </p>
+            {/* The density ramp as a legend. It is the one piece of visual language a reader
+                needs to interpret every map on the site, so it is worth restating at the end. */}
+            <div className="flex items-center gap-2">
+              <span className="cf-accent text-[10px] cf-dim2">CLEAR</span>
+              <span className="h-1.5 w-28 rounded-full" style={{ background: "linear-gradient(90deg, var(--cf-green), var(--cf-amber), var(--cf-orange), var(--cf-red))" }} />
+              <span className="cf-accent text-[10px] cf-dim2">CRUSH</span>
+            </div>
           </div>
           <div>
             <div className="cf-accent text-[10px] cf-dim2 mb-4">PLATFORM</div>
             <div className="flex flex-col gap-2">
               {NAV.map((r) => (
                 <a key={r.path} href={`#${r.path}`} onClick={(e) => { e.preventDefault(); navigate(r.path); }}
-                  className="text-sm cf-dim hover:text-white cf-focus rounded w-fit transition-colors">{r.label}</a>
+                  className="text-sm cf-dim hover:text-white cf-focus rounded w-fit transition-all duration-300 hover:translate-x-1">{r.label}</a>
               ))}
             </div>
           </div>
@@ -3198,7 +5108,7 @@ function Footer({ navigate }) {
             <div className="flex flex-col gap-2">
               {Object.values(ROLES).map((r) => (
                 <a key={r.key} href={`#/login/${r.key}`} onClick={(e) => { e.preventDefault(); navigate(`/login/${r.key}`); }}
-                  className="text-sm cf-dim hover:text-white cf-focus rounded w-fit transition-colors">{r.label}</a>
+                  className="text-sm cf-dim hover:text-white cf-focus rounded w-fit transition-all duration-300 hover:translate-x-1">{r.label}</a>
               ))}
             </div>
           </div>
@@ -3218,6 +5128,19 @@ function Footer({ navigate }) {
 export default function CrowdFlowApp() {
   const [route, navigate] = useHashRoute();
   const [session, setSession] = useState(null);
+
+  // A token in localStorage outlives the page, so the app asks the backend who it belongs to
+  // on boot. Without this, a refresh looked signed-out while every API call was still
+  // authenticated — the two states would disagree until the next manual login.
+  useEffect(() => {
+    let alive = true;
+    api.auth.me()
+      .then((me) => {
+        if (alive && me) setSession({ role: me.role.toLowerCase(), email: me.email, id: me.id });
+      })
+      .catch(() => { /* signed out is the correct fallback */ });
+    return () => { alive = false; };
+  }, []);
   const reduced = useReducedMotion();
 
   useEffect(() => {
@@ -3225,7 +5148,7 @@ export default function CrowdFlowApp() {
   }, [route]);
 
   const signIn = (s) => setSession(s);
-  const signOut = () => setSession(null);
+  const signOut = () => { api.auth.signOut(); setSession(null); };
 
   const isPortal = route.startsWith("/app/");
   const loginMatch = route.match(/^\/login\/(walker|client|admin)$/);
@@ -3247,6 +5170,7 @@ export default function CrowdFlowApp() {
     }
   } else {
     switch (route) {
+      case "/how": page = <HowItWorksPage navigate={navigate} />; break;
       case "/platform": page = <PlatformPage navigate={navigate} />; break;
       case "/intelligence": page = <IntelligencePage />; break;
       case "/results": page = <ResultsPage />; break;
@@ -3260,7 +5184,7 @@ export default function CrowdFlowApp() {
       <style>{STYLE}</style>
       <MeshField />
       <div className="relative" style={{ zIndex: 2 }}>
-        <Header route={route} navigate={navigate} session={session} signOut={signOut} />
+        <Header route={route} navigate={navigate} session={session} signOut={signOut} inPortal={isPortal} />
         {/* `mode="wait"` so the outgoing page finishes leaving before the next arrives.
             Cross-fading them instead put two full-height pages in the layout at once and
             the footer jumped as they swapped. */}
