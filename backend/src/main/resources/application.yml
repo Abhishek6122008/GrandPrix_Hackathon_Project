@@ -4,17 +4,117 @@ server:
 spring:
   application:
     name: crowd-flow-optimiser
+
+  # Credentials live outside the repo.
+  #
+  # secrets.yml sits next to this file's module root, is listed in .gitignore, and holds the
+  # admin password and the SMTP app password. `optional:` means a checkout without one still
+  # boots — the admin account simply is not seeded and reset codes are not emailed. See
+  # secrets.example.yml for the shape.
+  config:
+    import: optional:file:./secrets.yml
+
+  # --- outgoing mail --------------------------------------------------------
+  # Used only to deliver password-reset codes. Inert until a username and password are set,
+  # at which point ResetCodeMailer starts sending and the code stops being returned to the
+  # caller. For Gmail the password must be a 16-character App Password, not the account
+  # password — Google stopped accepting those over SMTP in 2022.
+  mail:
+    host: ${MAIL_HOST:smtp.gmail.com}
+    port: ${MAIL_PORT:587}
+    username: ${MAIL_USERNAME:}
+    password: ${MAIL_PASSWORD:}
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
+          # Without these a blocked outbound port 587 hangs the reset request until the
+          # socket gives up, instead of failing fast into the log-and-fall-back path.
+          connectiontimeout: 5000
+          timeout: 5000
+          writetimeout: 5000
+
+  # --- database -------------------------------------------------------------
+  # Local dev writes an H2 file under ./data, so a restart keeps your accounts and no Docker
+  # or server install is needed to run the project. The cloud profile swaps this for Postgres
+  # (see application-cloud.yml) without any code change.
+  datasource:
+    url: ${DB_URL:jdbc:h2:file:./data/crowdflow;AUTO_SERVER=TRUE;DB_CLOSE_DELAY=-1}
+    username: ${DB_USERNAME:sa}
+    password: ${DB_PASSWORD:}
+  jpa:
+    open-in-view: false
+    hibernate:
+      # Flyway owns the schema. Hibernate only validates that the entities match what the
+      # migrations produced, so a drift between the two fails at boot rather than at runtime.
+      ddl-auto: validate
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+  h2:
+    console:
+      enabled: ${H2_CONSOLE:false}
   task:
     scheduling:
       # Two independent clocks run here: the /simulations flow ticker and the /sessions agent
       # ticker. The default pool of 1 would make a slow tick on one stall the other.
       pool-size: 4
 
+auth:
+  jwt:
+    # MUST be overridden outside local dev. The cloud profile refuses to start on the default.
+    secret: ${AUTH_JWT_SECRET:dev-only-insecure-secret-change-me-in-any-real-deployment}
+    ttl-minutes: ${AUTH_JWT_TTL_MINUTES:720}
+    issuer: crowd-flow-optimiser
+
+  # Who gets the operations console. Comma-separated addresses; everyone else is refused the
+  # admin portal no matter which door they knock on. Applied at every registration and login,
+  # so adding an address promotes that account at its next sign-in and removing one demotes it.
+  #
+  # Deliberately empty here, because this file is committed to a public repository: a real
+  # address in it would publish who holds admin, and publish that person's inbox to every
+  # scraper that reads the repo. Set it in secrets.yml locally, or AUTH_ADMIN_EMAILS on a
+  # deployment. Empty means nobody has an admin portal, which is the safe way to be wrong.
+  admin-emails: ${AUTH_ADMIN_EMAILS:}
+
+  # Password for seeding an allowlisted admin account that does not exist yet. Deliberately
+  # empty here: this file is committed. Set it in secrets.yml or as AUTH_ADMIN_PASSWORD.
+  #
+  # Only ever used to create a missing account. An admin who already exists keeps whatever
+  # password they have, so changing this does not reset anyone.
+  admin-password: ${AUTH_ADMIN_PASSWORD:}
+
+  reset:
+    # How long a password-reset code stays good.
+    ttl-minutes: ${AUTH_RESET_TTL_MINUTES:30}
+    # Return the reset code in the HTTP response instead of only logging it.
+    #
+    # There is no mail server in this project, so locally this is the delivery mechanism and
+    # the sign-in screen fills the code in for you. It is off under the cloud profile, where
+    # handing a reset code to whoever asked for it would let anyone take any account.
+    expose-code: ${AUTH_EXPOSE_RESET_CODE:true}
+    # From address on reset emails. Defaults to the authenticated mailbox, which is what most
+    # providers require anyway.
+    mail-from: ${MAIL_FROM:}
+    product-name: Crowd Flow Optimiser
+
+  # Both optional. Leave unset and that provider is skipped entirely; set one and tokens it
+  # issued are accepted alongside locally-minted ones.
+  supabase:
+    jwt-secret: ${SUPABASE_JWT_SECRET:}
+  firebase:
+    project-id: ${FIREBASE_PROJECT_ID:}
+
 cors:
-  # Frontend dev origins allowed to call this API / open the WebSocket.
-  allowed-origins:
-    - http://localhost:5173
-    - http://127.0.0.1:5173
+  # Origins allowed to call this API and open the WebSocket.
+  #
+  # Comma-separated so a deployment can set one env var (CORS_ALLOWED_ORIGINS) with its real
+  # frontend URL. The defaults cover Vite dev (5173) and Vite preview (4173) — a build served
+  # by `npm run preview` is a different port from `npm run dev`, and a browser treats the two
+  # as different origins, so omitting one silently breaks every API call from a preview build.
+  allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173}
 
 simulation:
   # Wall-clock milliseconds between simulation ticks when a run is live.

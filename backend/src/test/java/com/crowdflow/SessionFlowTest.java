@@ -24,6 +24,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -63,6 +64,37 @@ class SessionFlowTest {
 
     @Autowired
     private TestRestTemplate rest;
+
+    /**
+     * Signs the whole class in as a CLIENT before any test runs.
+     *
+     * These cases drive the API over real HTTP, so {@code @WithMockUser} does not apply — that
+     * populates the SecurityContext in-process and never reaches a socket. Registering a real
+     * account and attaching its bearer token keeps the security filter chain genuinely in the
+     * path, so an authorisation regression still surfaces here as a 403 rather than being
+     * configured away.
+     */
+    @BeforeEach
+    void authenticate() {
+        if (bearer == null) {
+            var body = Map.of(
+                    "email", "session-flow-test@crowdflow.local",
+                    "password", "test-password-123",
+                    "role", "client");
+            ResponseEntity<Map> res = rest.postForEntity("/auth/register", body, Map.class);
+            if (res.getStatusCode() != HttpStatus.CREATED) {   // already registered by an earlier run
+                res = rest.postForEntity("/auth/login",
+                        Map.of("email", body.get("email"), "password", body.get("password")), Map.class);
+            }
+            bearer = (String) res.getBody().get("token");
+        }
+        rest.getRestTemplate().setInterceptors(List.of((request, bytes, execution) -> {
+            request.getHeaders().setBearerAuth(bearer);
+            return execution.execute(request, bytes);
+        }));
+    }
+
+    private static String bearer;
 
     @Autowired
     private SessionManager sessionManager;

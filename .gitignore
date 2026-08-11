@@ -13,11 +13,15 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 
-# Secrets — every .env.example in this repo is a committed template; the real one never is.
+# Secrets — every *.example file in this repo is a committed template; the real one never is.
 .env
 .env.local
+secrets.yml
 
 # Editor / tooling
+# Local MCP server config. References its key as ${API_KEY_21ST} so it leaks nothing, but it is
+# one developer's tooling rather than part of the project.
+.mcp.json
 .idea/
 .vscode/
 .DS_Store
