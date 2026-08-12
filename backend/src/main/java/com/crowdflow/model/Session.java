@@ -193,10 +193,19 @@ public class Session {
      *         answer 429 rather than letting an unauthenticated endpoint grow without limit
      */
     public boolean placeWalker(String walkerId, String nodeId, long ttlMillis, int cap) {
+        long now = System.currentTimeMillis();
+        // Sweep before counting. Without this the cap is measured against attendees who have
+        // already left, so a venue that once filled would go on refusing newcomers until
+        // something else happened to call liveOccupancy — which a paused session never does.
+        walkers.values().removeIf(walker -> walker.expiresAtMillis() <= now);
+
+        // An attendee already here is always allowed to move. Refusing them would freeze
+        // everyone in a full venue at whichever zone they last reported, turning a capacity
+        // limit into stale data on the operator's map.
         if (walkers.size() >= cap && !walkers.containsKey(walkerId)) {
             return false;
         }
-        walkers.put(walkerId, new RealWalker(nodeId, System.currentTimeMillis() + ttlMillis));
+        walkers.put(walkerId, new RealWalker(nodeId, now + ttlMillis));
         return true;
     }
 

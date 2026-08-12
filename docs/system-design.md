@@ -5,7 +5,7 @@
 Crowds bunch up at gates, food counters and exits without warning. We simulate the venue,
 spot the pile-up before it forms, and say where to send people instead.
 
-## Three tiers
+## Three tiers, and a fourth client
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -15,6 +15,11 @@ spot the pile-up before it forms, and say where to send people instead.
 │  useSimulationSocket                                        │
 └───────────────┬──────────────────────────┬──────────────────┘
                 │ HTTP                     │ WebSocket
+                │
+   ┌────────────┴──────────────┐
+   │  Flutter (mobile/)        │  attendees only: polls state, PUTs its zone.
+   │  consent → join → live    │  Never holds the socket — a frame is ~240 KB/s
+   └───────────────────────────┘  of agent positions it is forbidden to draw.
 ┌───────────────▼──────────────────────────▼──────────────────┐
 │  Spring Boot                                                │
 │  Controllers → SimulationEngine (tick loop)                 │
@@ -70,6 +75,20 @@ Two levers, both matching what the advisories actually tell staff to do:
    people wait outside rather than pack into the gate.
 
 On the sample venue that is 51 → 0 zone-ticks above critical, peaking at 85% instead of 100%.
+
+### Real attendees are excluded from it, deliberately
+
+Attendees on the mobile app raise the density an operator sees. They are kept out of
+`peakDensity` and `criticalNodeTicks`, which are the two numbers `GET /summary` compares.
+
+The twin has no real attendees and cannot have any — it is a second simulation of the same
+seed, not a second venue people can walk into. So counting a phone standing in a gate would
+add it to the optimised side and nowhere else, and the narrative would report that rerouting
+had made the venue worse. The split is one line in `SessionManager.advance`:
+`Session.occupancy()` defines the comparison, `Session.liveOccupancy()` defines the display.
+
+`WalkerIngestTest.realAttendeesRaiseLiveDensityButNeverTheBaselineNumbers` is the executable
+form of that sentence.
 
 ### Reading the numbers
 

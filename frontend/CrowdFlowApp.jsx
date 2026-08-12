@@ -1926,10 +1926,25 @@ function WalkerApp({ session, navigate, signOut }) {
   const flow = useCrowdFlow();
   const { venue, info, connected } = flow;
 
-  // Where the attendee says they are. The backend has no per-person GPS — it simulates a crowd,
-  // it does not track your phone — so this is zone-level and self-declared, and the UI says so
-  // rather than drawing a false 3-metre accuracy circle.
+  // Where the attendee says they are. Zone-level and self-declared: a browser has no GPS worth
+  // trusting at this granularity, so the UI says which zone rather than drawing a false
+  // three-metre accuracy circle. The mobile app can do better, and falls back to exactly this.
   const [atNodeId, setAtNodeId] = useState(null);
+
+  /**
+   * This device's attendee id, generated once and kept.
+   *
+   * Opaque, session-scoped in practice, and attached to no account — the venue only ever learns
+   * "some attendee is in this zone". Persisted so a refresh does not leave the previous id
+   * ageing out in the venue, counting somebody who is not there.
+   */
+  const [walkerId] = useState(() => {
+    const existing = localStorage.getItem("cf-walker-id");
+    if (existing) return existing;
+    const created = `w-${Math.random().toString(36).slice(2, 10)}`;
+    localStorage.setItem("cf-walker-id", created);
+    return created;
+  });
   const [routePath, setRoutePath] = useState(null);
   const [routeInfo, setRouteInfo] = useState(null);
 
@@ -1972,6 +1987,32 @@ function WalkerApp({ session, navigate, signOut }) {
 
     return () => { cancelled = true; };
   }, [venue, atNodeId]);
+
+  /**
+   * Tells the venue which zone we are in, so the operator's density includes us.
+   *
+   * The same endpoint the mobile app uses, with the self-declared form — a browser has no GPS
+   * worth trusting at zone granularity, and this is exactly the fallback the phone drops to when
+   * permission is denied. One code path, so a web attendee and a phone attendee are the same
+   * kind of thing and land in the same count.
+   *
+   * Re-sent on a timer as well as on change: the backend expires an attendee after
+   * `session.walker-ttl-ms` (30s), so a tab left open on one zone has to keep saying so or it
+   * silently stops counting.
+   */
+  useEffect(() => {
+    if (!flow.sessionId || !atNodeId) return undefined;
+    let cancelled = false;
+
+    // Failure here must not cost the attendee their map. They are still shown the venue and
+    // their own position; the only thing lost is the operator seeing them, and there is nothing
+    // useful an attendee could do about that.
+    const report = () => api.placeWalker(flow.sessionId, walkerId, { nodeId: atNodeId }).catch(() => {});
+
+    report();
+    const timer = setInterval(() => { if (!cancelled) report(); }, 15000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [flow.sessionId, atNodeId, walkerId]);
 
   const here = venue?.halls.find((h) => h.id === atNodeId) ?? null;
 
@@ -2040,7 +2081,12 @@ function WalkerApp({ session, navigate, signOut }) {
             </div>
             <div className="flex items-center gap-2">
               <ConnectionPill connected={connected} status={info?.status} />
-              <button onClick={() => { flow.leave(); setAtNodeId(null); setRoutePath(null); }}
+              {/* Leave the venue's count immediately rather than waiting out the TTL. Best
+                  effort: if it fails, the attendee ages out in thirty seconds anyway. */}
+              <button onClick={() => {
+                if (flow.sessionId) api.removeWalker(flow.sessionId, walkerId).catch(() => {});
+                flow.leave(); setAtNodeId(null); setRoutePath(null);
+              }}
                 className="cf-focus cf-btn-outline rounded-lg px-3.5 py-2 cf-accent text-[10px]">
                 CHANGE VENUE
               </button>
@@ -2054,9 +2100,10 @@ function WalkerApp({ session, navigate, signOut }) {
           <div className="cf-card rounded-xl px-5 py-4 mt-4 flex items-start gap-3">
             <MapPin className="w-4 h-4 cf-blue-hi shrink-0 mt-0.5" strokeWidth={2} />
             <p className="text-sm cf-dim leading-relaxed">
-              Tap the zone you're standing in to set your position — the venue tracks crowd
-              density, not individual phones, so your location is zone-level and stays on this
-              device. Other attendees are never shown to you.
+              Tap the zone you're standing in. The venue is told which zone that is — never a
+              coordinate — so staff see how full each area is, not where you are. You are not
+              named, nothing is linked to an account, and you stop counting about thirty seconds
+              after you close this. Other attendees are never shown to you.
             </p>
           </div>
         </div>

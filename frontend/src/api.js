@@ -67,6 +67,21 @@ export const api = {
   stopSession: (id) => post(`/sessions/${id}/stop`),
   /** The same frame the WebSocket pushes — for a first paint before the socket opens. */
   getSessionState: (id) => request(`/sessions/${id}/state`),
+
+  /**
+   * Tells the venue which zone an attendee is standing in.
+   *
+   * The same endpoint the mobile app uses. The browser sends the self-declared form
+   * (`{ nodeId }`) because a laptop has no useful GPS — but it is the same walker, counted the
+   * same way, so an operator sees web attendees and phone attendees in one number.
+   *
+   * `walkerId` is opaque and generated on this device; there is no account behind it.
+   */
+  placeWalker: (sessionId, walkerId, fix) =>
+    request(`/sessions/${sessionId}/walkers/${encodeURIComponent(walkerId)}`,
+      { method: 'PUT', body: JSON.stringify(fix) }),
+  removeWalker: (sessionId, walkerId) =>
+    request(`/sessions/${sessionId}/walkers/${encodeURIComponent(walkerId)}`, { method: 'DELETE' }),
   /** Post-run stats including the baseline twin comparison. */
   getSessionSummary: (id) => request(`/sessions/${id}/summary`),
 

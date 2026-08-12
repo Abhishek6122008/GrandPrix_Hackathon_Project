@@ -73,3 +73,25 @@ problems with exact algorithms; forcing a model in would be slower and worse.
 - HF endpoint down → mock fallbacks are already on, nothing visibly changes.
 - Backend down → the frontend still renders on mock data; say so, keep moving.
 - **_[TBD: record a 30-second screen capture on Day 4 as the last-resort fallback.]_**
+
+## If asked: does it track people's phones?
+
+Not the simulation. Those agents are a model — no device is involved, and that is true of
+everything on the operator's map by default.
+
+The attendee app is opt-in and does report position, so the honest answer is "only for people
+who choose it, and only as a zone":
+
+- A GPS fix is turned into a zone id at the ingest boundary and the **coordinates are
+  discarded**. `Session` holds a zone and an expiry per attendee and has no field for a
+  coordinate.
+- **Foreground only.** No background permission is requested. Close the app and you drop off
+  the map in 30 seconds.
+- **No account.** The id is a UUID the app generates for itself.
+- If the fix is less accurate than the zone is wide, the app **places nobody** and says so,
+  rather than drawing a dot it cannot justify.
+- Real attendees never enter the before/after numbers — the baseline twin has none, so
+  counting them would make rerouting look worse than it is.
+
+The demo runs identically with zero phones connected, which is the point: this adds precision
+where it exists and changes nothing where it does not.
