@@ -9,6 +9,7 @@ import com.crowdflow.security.ResetCodeMailer;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -28,6 +29,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -87,11 +89,28 @@ public class AuthController {
 
     public record TokenResponse(String token, String tokenType, long expiresIn, UserResponse user) { }
 
-    public record UserResponse(String id, String email, String role, String provider) {
+    public record UserResponse(String id, String email, String role, String provider,
+                               String displayName, String bio, String avatar) {
         static UserResponse of(AppUser u) {
-            return new UserResponse(u.getId(), u.getEmail(), u.getRole().name(), u.getProvider());
+            return new UserResponse(u.getId(), u.getEmail(), u.getRole().name(), u.getProvider(),
+                    u.getDisplayName(), u.getBio(), u.getAvatar());
         }
     }
+
+    /**
+     * A profile edit. Every field is optional and only the ones present are written, so the
+     * client can save a name without having to send the avatar back with it.
+     *
+     * Clearing is explicit rather than implied by omission: an empty string blanks the field,
+     * a missing field leaves it alone. Without that distinction there is no way to remove an
+     * avatar you have already set.
+     */
+    public record ProfileRequest(
+            @Size(max = 120, message = "Display name cannot be longer than 120 characters")
+            String displayName,
+            @Size(max = 280, message = "Bio cannot be longer than 280 characters")
+            String bio,
+            String avatar) { }
 
     /**
      * No I, O, 0 or 1 — a recovery code gets read off one screen and typed into another, and
@@ -265,6 +284,61 @@ public class AuthController {
                 .map(UserResponse::of)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Unknown account"));
     }
+
+    /**
+     * Edit your own profile. Never anyone else's — the row is chosen by the token's subject,
+     * so there is no id in the path to tamper with.
+     */
+    @PatchMapping("/profile")
+    public UserResponse updateProfile(@AuthenticationPrincipal AuthPrincipal principal,
+                                      @Valid @RequestBody ProfileRequest body) {
+        if (principal == null) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Not signed in");
+        }
+        AppUser user = users.findById(principal.userId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Unknown account"));
+
+        if (body.displayName() != null) {
+            String name = body.displayName().trim();
+            user.setDisplayName(name.isEmpty() ? null : name);
+        }
+        if (body.bio() != null) {
+            String bio = body.bio().trim();
+            user.setBio(bio.isEmpty() ? null : bio);
+        }
+        if (body.avatar() != null) {
+            String avatar = body.avatar().trim();
+            user.setAvatar(avatar.isEmpty() ? null : validatedAvatar(avatar));
+        }
+        user.setProfileUpdatedAt(Instant.now());
+        return UserResponse.of(users.save(user));
+    }
+
+    /** Largest avatar accepted, measured on the encoded string rather than the decoded image. */
+    private static final int AVATAR_MAX_CHARS = 180_000;
+
+    /**
+     * Accept only an inline image, and only a small one.
+     *
+     * The column will hold any string, so this is what stops it becoming a general-purpose
+     * blob store. A remote URL is refused too: rendering one would let a profile decide which
+     * third-party host every viewer's browser calls, which is a tracking pixel with extra
+     * steps. Inline data has no such reach.
+     */
+    private static String validatedAvatar(String avatar) {
+        if (!AVATAR_PATTERN.matcher(avatar).find()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Avatar must be an inline PNG, JPEG, WEBP, GIF or SVG image");
+        }
+        if (avatar.length() > AVATAR_MAX_CHARS) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Avatar is too large — crop or shrink it to roughly 120KB");
+        }
+        return avatar;
+    }
+
+    private static final Pattern AVATAR_PATTERN =
+            Pattern.compile("^data:image/(png|jpeg|jpg|webp|gif|svg\\+xml);base64,[A-Za-z0-9+/=\\s]+$");
 
     /**
      * Reconcile the account's role with the door it just signed in at.

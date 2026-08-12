@@ -65,6 +65,23 @@ public class AppUser {
     @Column(name = "reset_code_expires_at")
     private Instant resetCodeExpiresAt;
 
+    /** One short line the person writes about themselves. Never required. */
+    @Column(length = 280)
+    private String bio;
+
+    /**
+     * The avatar as a {@code data:image/...;base64,...} URI.
+     *
+     * Travels with the account rather than behind a second endpoint, so a header can draw it
+     * without another round trip. Size is bounded twice: by the application before it is
+     * accepted, and by the column width behind that.
+     */
+    @Column(length = 200_000)
+    private String avatar;
+
+    @Column(name = "profile_updated_at")
+    private Instant profileUpdatedAt;
+
     protected AppUser() { }
 
     public AppUser(String email, String passwordHash, Role role, String provider) {
@@ -91,6 +108,12 @@ public class AppUser {
     public Instant getCreatedAt() { return createdAt; }
     public Instant getLastLoginAt() { return lastLoginAt; }
     public void setLastLoginAt(Instant v) { this.lastLoginAt = v; }
+    public String getBio() { return bio; }
+    public void setBio(String v) { this.bio = v; }
+    public String getAvatar() { return avatar; }
+    public void setAvatar(String v) { this.avatar = v; }
+    public Instant getProfileUpdatedAt() { return profileUpdatedAt; }
+    public void setProfileUpdatedAt(Instant v) { this.profileUpdatedAt = v; }
     public String getResetCodeHash() { return resetCodeHash; }
     public Instant getResetCodeExpiresAt() { return resetCodeExpiresAt; }
 

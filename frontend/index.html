@@ -15,10 +15,14 @@
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary_large_image" />
 
-    <!-- The font stylesheet is @imported from CrowdFlowApp's style block; preconnecting here
-         starts the handshake during HTML parse instead of after first paint. -->
+    <!-- Fonts are requested here rather than @imported from the app's style block. An @import
+         inside CSS is only discovered once that CSS has been fetched and parsed, so the font
+         request started a round trip late and the first paint landed on the fallback face.
+         As a <link> in the head the browser's preload scanner finds it while still parsing
+         this document, alongside the preconnects that warm the two hosts it needs. -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@400;600;700;800;900&family=Rajdhani:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" />
 
     <title>Crowd Flow Optimiser — see the crush before it forms</title>
   </head>

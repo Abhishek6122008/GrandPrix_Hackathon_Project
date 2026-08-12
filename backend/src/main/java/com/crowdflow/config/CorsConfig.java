@@ -25,7 +25,13 @@ public class CorsConfig implements WebMvcConfigurer {
     public void addCorsMappings(CorsRegistry registry) {
         registry.addMapping("/**")
                 .allowedOrigins(allowedOrigins.toArray(String[]::new))
-                .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
+                // PATCH belongs here as much as PUT does: /auth/profile is a partial update,
+                // and a method missing from this list fails in a way that points at the wrong
+                // thing. The browser's preflight is refused, fetch rejects as a transport
+                // error, and the client reports the backend as unreachable — while the server
+                // is up and answering everything else. curl never sees it, because curl does
+                // not preflight.
+                .allowedMethods("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS")
                 .allowedHeaders("*");
     }
 }

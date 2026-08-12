@@ -82,6 +82,9 @@ async function request(path, options = {}) {
 const post = (path, body) =>
   request(path, { method: 'POST', body: body === undefined ? undefined : JSON.stringify(body) });
 
+const patch = (path, body) =>
+  request(path, { method: 'PATCH', body: JSON.stringify(body) });
+
 export const api = {
   baseUrl: BASE,
 
@@ -135,6 +138,21 @@ export const api = {
         return null;   // request() has already cleared a 401 token
       }
     },
+    /**
+     * Edit your own profile. Returns the saved account, so the caller can replace its copy
+     * with what the server actually stored rather than with what it hoped it sent.
+     *
+     * PATCH, not PUT: only the keys present are written, so saving a name does not require
+     * sending the avatar back alongside it. Pass an empty string to clear a field — omitting
+     * it leaves the stored value alone, which is the only way to distinguish "unchanged" from
+     * "remove this".
+     */
+    updateProfile: ({ displayName, bio, avatar }) => patch('/auth/profile', {
+      ...(displayName === undefined ? {} : { displayName }),
+      ...(bio === undefined ? {} : { bio }),
+      ...(avatar === undefined ? {} : { avatar }),
+    }),
+
     signOut() { auth.clear(); },
     isSignedIn: () => Boolean(auth.token),
   },
