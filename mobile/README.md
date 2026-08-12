@@ -9,7 +9,7 @@ browser at a venue generally cannot.
 
 ## Running it
 
-Needs the Flutter SDK (3.4+) and a running backend.
+Needs the Flutter SDK (3.27+) and a running backend. Verified against Flutter 3.44.9 / Dart 3.12.2.
 
 ```bash
 cd mobile

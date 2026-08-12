@@ -130,7 +130,7 @@ class _VenuePainter extends CustomPainter {
 
       // A soft wash whose strength tracks density, so a busy zone reads as busy at a glance
       // without the number having to be read.
-      canvas.drawPath(path, Paint()..color = colour.withOpacity(0.12 + hall.density.clamp(0, 1) * 0.45));
+      canvas.drawPath(path, Paint()..color = colour.withValues(alpha: 0.12 + hall.density.clamp(0, 1) * 0.45));
       canvas.drawPath(
         path,
         Paint()
@@ -180,7 +180,7 @@ class _VenuePainter extends CustomPainter {
       final accuracy = (fixed.accuracyVenueUnits ?? 0) * scale;
       if (accuracy > 0) {
         // Never smaller than reported. A flattering halo is a lie about the sensor.
-        canvas.drawCircle(centre, accuracy, Paint()..color = _blueHi.withOpacity(0.16));
+        canvas.drawCircle(centre, accuracy, Paint()..color = _blueHi.withValues(alpha: 0.16));
       }
       canvas.drawCircle(centre, 2.2 * scale, Paint()..color = Colors.white);
       canvas.drawCircle(centre, 1.6 * scale, Paint()..color = _blueHi);
@@ -223,9 +223,9 @@ class StatusPill extends StatelessWidget {
   Widget build(BuildContext context) => Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
         decoration: BoxDecoration(
-          color: colour.withOpacity(0.12),
+          color: colour.withValues(alpha: 0.12),
           borderRadius: BorderRadius.circular(999),
-          border: Border.all(color: colour.withOpacity(0.4)),
+          border: Border.all(color: colour.withValues(alpha: 0.4)),
         ),
         child: Row(mainAxisSize: MainAxisSize.min, children: [
           Container(width: 6, height: 6, decoration: BoxDecoration(color: colour, shape: BoxShape.circle)),
@@ -249,8 +249,8 @@ class ErrorNote extends StatelessWidget {
       margin: const EdgeInsets.only(top: 12),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: const Color(0xFFE10600).withOpacity(0.08),
-        border: Border.all(color: const Color(0xFFE10600).withOpacity(0.4)),
+        color: const Color(0xFFE10600).withValues(alpha: 0.08),
+        border: Border.all(color: const Color(0xFFE10600).withValues(alpha: 0.4)),
         borderRadius: BorderRadius.circular(12),
       ),
       child: Text(error!, style: const TextStyle(color: Color(0xFFE10600), fontSize: 12)),

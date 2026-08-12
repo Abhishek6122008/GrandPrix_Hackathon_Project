@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 
-import '../map_projection.dart';
 import '../venue_map.dart';
 import '../walker_session.dart';
 

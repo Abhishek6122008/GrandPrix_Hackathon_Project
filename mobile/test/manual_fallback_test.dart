@@ -86,7 +86,7 @@ WalkerSession _session(
   bool servicesEnabled = true,
 }) =>
     WalkerSession(
-      api: CrowdFlowApi(baseUrl: '', client: recorder.client()),
+      api: CrowdFlowApi(baseUrl: 'http://venue.test', client: recorder.client()),
       walkerId: 'w-1',
       checkPermission: () async => permission,
       requestPermission: () async => permission,
@@ -150,7 +150,7 @@ void main() {
     final recorder = _Recorder(georeferenced: false);
     var permissionAsked = false;
     final session = WalkerSession(
-      api: CrowdFlowApi(baseUrl: '', client: recorder.client()),
+      api: CrowdFlowApi(baseUrl: 'http://venue.test', client: recorder.client()),
       walkerId: 'w-1',
       checkPermission: () async {
         permissionAsked = true;

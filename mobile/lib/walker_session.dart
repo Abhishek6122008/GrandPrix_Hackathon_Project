@@ -1,6 +1,9 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
+// widgets.dart, not foundation.dart: ChangeNotifier lives in foundation, but the lifecycle
+// hooks this class needs — WidgetsBinding, WidgetsBindingObserver, AppLifecycleState — do
+// not. widgets.dart re-exports foundation, so this is a superset.
+import 'package:flutter/widgets.dart';
 import 'package:geolocator/geolocator.dart';
 
 import 'api.dart';
@@ -82,6 +85,11 @@ class WalkerSession extends ChangeNotifier with WidgetsBindingObserver {
   String? routeDestination;
   double? routeCost;
 
+  /// Set in [dispose]. Every async continuation checks it before touching state: a poll or a
+  /// position report already in flight will land after the attendee has left the screen, and
+  /// notifying a disposed ChangeNotifier throws.
+  bool _disposed = false;
+
   Timer? _poll;
   StreamSubscription<Position>? _positions;
   DateTime? _lastSentAt;
@@ -97,12 +105,16 @@ class WalkerSession extends ChangeNotifier with WidgetsBindingObserver {
     return halls.where((hall) => hall.isExit).toList();
   }
 
+  void _notify() {
+    if (!_disposed) notifyListeners();
+  }
+
   // ------------------------------------------------------------------ joining
 
   Future<void> join(String id) async {
     busy = true;
     error = null;
-    notifyListeners();
+    _notify();
     try {
       final info = await api.getSession(id);
       final venueId = info['venueId'] as String;
@@ -113,14 +125,14 @@ class WalkerSession extends ChangeNotifier with WidgetsBindingObserver {
         mode = PositionMode.manual;
         manualReason = ManualReason.venueNotGeoreferenced;
       }
-      _startPolling();
+      await _startPolling();
       WidgetsBinding.instance.addObserver(this);
     } on ApiError catch (e) {
       error = e.status == 404 ? 'No session found with ID "$id".' : e.message;
       rethrow;
     } finally {
       busy = false;
-      notifyListeners();
+      _notify();
     }
   }
 
@@ -135,7 +147,7 @@ class WalkerSession extends ChangeNotifier with WidgetsBindingObserver {
     frame = null;
     placement = null;
     routePath = null;
-    notifyListeners();
+    _notify();
   }
 
   // ------------------------------------------------------------------ the live frame
@@ -145,9 +157,12 @@ class WalkerSession extends ChangeNotifier with WidgetsBindingObserver {
   /// A broadcast frame carries up to 600 agent positions at ~5 Hz — around 240 KB/s — and this
   /// app is not allowed to draw a single one of them. Two seconds of zone densities is what it
   /// actually needs.
-  void _startPolling() {
+  Future<void> _startPolling() async {
     _poll?.cancel();
-    _refresh();
+    // Awaited, so anyone who has awaited join() has a venue *and* its densities. Without this
+    // the first paint shows every zone at zero for up to two seconds.
+    await _refresh();
+    if (_disposed) return;
     _poll = Timer.periodic(const Duration(seconds: 2), (_) => _refresh());
   }
 
@@ -166,7 +181,7 @@ class WalkerSession extends ChangeNotifier with WidgetsBindingObserver {
       connected = false;
       error = e.message;
     }
-    notifyListeners();
+    _notify();
   }
 
   // ------------------------------------------------------------------ position
@@ -200,7 +215,7 @@ class WalkerSession extends ChangeNotifier with WidgetsBindingObserver {
 
     mode = PositionMode.gps;
     manualReason = ManualReason.none;
-    notifyListeners();
+    _notify();
 
     _positions?.cancel();
     _positions = _positionStream().listen(_onFix, onError: (_) {
@@ -214,7 +229,7 @@ class WalkerSession extends ChangeNotifier with WidgetsBindingObserver {
     manualReason = reason;
     _positions?.cancel();
     _positions = null;
-    notifyListeners();
+    _notify();
   }
 
   Future<void> _onFix(Position position) async {
@@ -259,7 +274,7 @@ class WalkerSession extends ChangeNotifier with WidgetsBindingObserver {
       }
       error = e.message;
     }
-    notifyListeners();
+    _notify();
   }
 
   /// The way out, from the server's Dijkstra over the venue's own edges.
@@ -308,6 +323,7 @@ class WalkerSession extends ChangeNotifier with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    _disposed = true;
     _poll?.cancel();
     _positions?.cancel();
     WidgetsBinding.instance.removeObserver(this);

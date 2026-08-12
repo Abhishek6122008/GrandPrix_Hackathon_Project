@@ -39,20 +39,31 @@ void main() {
       }
     });
 
-    /// The property the backend asserts on its own side as
-    /// `agentSpeedScalesWithTheVenueRatherThanBeingAbsolute`: a venue authored at twice the
-    /// size is the same venue. If this broke, the same layout would draw differently depending
-    /// on what units its author happened to pick.
-    test('renders a venue identically at twice the scale', () {
+    /// A venue authored at twice the size keeps its *shape*, so the same layout does not draw
+    /// differently depending on what units its author happened to pick.
+    ///
+    /// Note what is deliberately **not** asserted: that it draws at the same absolute size.
+    /// The bounding box is padded by [nodeRadius], which comes from capacity and is therefore
+    /// absolute — a 320-capacity gate is 18.7 units across whether the venue is 400 units wide
+    /// or 800. So the padding is a smaller fraction of a larger venue and the fitted scale is
+    /// not a pure ratio. That is correct: zone size is a property of the zone, not of the
+    /// drawing. An earlier version of this test asserted the pure-ratio version and failed.
+    test('preserves a venue\'s proportions at twice the scale', () {
+      double aspect(Projection p, double x, double y) {
+        final origin = p.toMap(0, 0);
+        final far = p.toMap(x, y);
+        return (far.x - origin.x) / (far.y - origin.y);
+      }
+
       final small = Projection.of(nodes());
       final large = Projection.of(const [
         VenueNode(id: 'a', name: 'A', type: 'GATE', capacity: 320, x: 0, y: 0),
         VenueNode(id: 'b', name: 'B', type: 'EXIT', capacity: 320, x: 800, y: 400),
       ]);
 
-      final smallSpan = small.toMap(400, 200).x - small.toMap(0, 0).x;
-      final largeSpan = large.toMap(800, 400).x - large.toMap(0, 0).x;
-      expect(largeSpan, closeTo(smallSpan, 0.5));
+      expect(aspect(large, 800, 400), closeTo(aspect(small, 400, 200), 0.001));
+      // And both are the 2:1 the coordinates describe.
+      expect(aspect(small, 400, 200), closeTo(2.0, 0.001));
     });
 
     test('uses one uniform scale, so a long thin venue is not stretched square', () {

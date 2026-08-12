@@ -59,22 +59,22 @@ class CrowdFlowApi {
   final http.Client _client;
 
   Future<Map<String, dynamic>> getSession(String sessionId) async =>
-      _getJson('/sessions/$sessionId') as Map<String, dynamic>;
+      await _getJson('/sessions/$sessionId') as Map<String, dynamic>;
 
-  Future<List<dynamic>> listSessions() async => _getJson('/sessions') as List<dynamic>;
+  Future<List<dynamic>> listSessions() async => await _getJson('/sessions') as List<dynamic>;
 
   Future<Map<String, dynamic>> getVenue(String venueId) async =>
-      _getJson('/venues/$venueId') as Map<String, dynamic>;
+      await _getJson('/venues/$venueId') as Map<String, dynamic>;
 
   /// `people=false`: this app never draws other attendees, so their positions would be tens of
   /// kilobytes per poll of data it is not allowed to show.
   Future<Map<String, dynamic>> getState(String sessionId) async =>
-      _getJson('/sessions/$sessionId/state?people=false') as Map<String, dynamic>;
+      await _getJson('/sessions/$sessionId/state?people=false') as Map<String, dynamic>;
 
   /// The walking route to the nearest exit, over the venue's own edges. Same endpoint the web
   /// Walker uses — the Dijkstra runs server-side and this app does not reimplement it.
   Future<Map<String, dynamic>> getRoute(String venueId, String fromNodeId) async =>
-      _getJson('/venues/$venueId/route?from=$fromNodeId') as Map<String, dynamic>;
+      await _getJson('/venues/$venueId/route?from=$fromNodeId') as Map<String, dynamic>;
 
   /// Whether this venue can resolve GPS at all. A 404 is the ordinary answer, not an error.
   Future<bool> hasGeoref(String venueId) async {
