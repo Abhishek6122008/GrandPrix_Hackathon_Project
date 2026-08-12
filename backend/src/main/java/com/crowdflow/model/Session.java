@@ -46,6 +46,26 @@ public class Session {
      */
     private final long seed;
 
+    /**
+     * Real attendees reporting position from a phone, keyed by the opaque id their app generated.
+     *
+     * <p>Concurrent because these arrive on request threads, unlike {@link #people}, which the
+     * tick thread owns exclusively. A walker is a zone and an expiry and nothing else — no
+     * coordinates are kept, so there is nothing in here to leak.
+     *
+     * <p>Deliberately <em>not</em> {@link Person} objects. Three things would break: the social
+     * force integrator rewrites x/y every tick so a reported position would survive about
+     * 100 ms; {@code resolveArrivals} deletes agents that reach an EXIT; and {@link #isFinished()}
+     * waits for {@code people} to empty, so an attendee who never walks out would keep the
+     * session RUNNING forever, past {@code finishedAtMillis}, past eviction — a leak that would
+     * only ever appear once somebody used the phone app.
+     */
+    private final Map<String, RealWalker> walkers = new ConcurrentHashMap<>();
+
+    /** A live attendee: the zone they last reported, and when that stops counting. */
+    public record RealWalker(String nodeId, long expiresAtMillis) {
+    }
+
     // --- tick-thread only -------------------------------------------------
     private final List<Person> people = new ArrayList<>();
     /** Rolling density snapshots, oldest first. Bounded — see SessionManager.historyWindow. */
@@ -122,7 +142,16 @@ public class Session {
         return twin;
     }
 
-    /** People currently in the venue, grouped by the node they are counted against. */
+    /**
+     * Simulated agents currently in the venue, grouped by the node they are counted against.
+     *
+     * <p><b>Simulated only, deliberately.</b> Real attendees reporting position from a phone are
+     * in {@link #walkers} and are added by {@link #liveOccupancy()} instead. The split exists
+     * because the baseline twin has no real attendees: counting them here would put them into
+     * {@code peakDensity} and {@code criticalNodeTicks} on the optimised side of the comparison
+     * and nowhere on the other, and {@code SessionSummary} would report that rerouting made the
+     * venue worse. This method defines the comparison; {@code liveOccupancy} defines the display.
+     */
     public Map<String, Integer> occupancy() {
         Map<String, Integer> counts = new LinkedHashMap<>();
         venue.nodes().forEach(node -> counts.put(node.id(), 0));
@@ -130,6 +159,56 @@ public class Session {
             counts.merge(person.getCurrentNodeId(), 1, Integer::sum);
         }
         return counts;
+    }
+
+    /**
+     * Simulated agents plus live attendees — what the map, the alerts and the AI advisory see.
+     *
+     * <p>Expiry is enforced here rather than by a second scheduler: this runs once or twice a
+     * tick and the map holds tens of entries, so a sweep would cost more than it saves.
+     *
+     * <p>ponytail: lazy TTL. Add a scheduled sweep if a venue ever holds thousands of phones.
+     */
+    public Map<String, Integer> liveOccupancy() {
+        Map<String, Integer> counts = occupancy();
+        if (walkers.isEmpty()) {
+            return counts;
+        }
+        long now = System.currentTimeMillis();
+        walkers.values().removeIf(walker -> walker.expiresAtMillis() <= now);
+        for (RealWalker walker : walkers.values()) {
+            // containsKey rather than merge: a node id from a venue that has since changed must
+            // not invent a zone that the density loop will then divide by a capacity it has not got.
+            if (counts.containsKey(walker.nodeId())) {
+                counts.merge(walker.nodeId(), 1, Integer::sum);
+            }
+        }
+        return counts;
+    }
+
+    /**
+     * Records where a real attendee says they are.
+     *
+     * @return false when the session is already holding {@code cap} walkers, so the caller can
+     *         answer 429 rather than letting an unauthenticated endpoint grow without limit
+     */
+    public boolean placeWalker(String walkerId, String nodeId, long ttlMillis, int cap) {
+        if (walkers.size() >= cap && !walkers.containsKey(walkerId)) {
+            return false;
+        }
+        walkers.put(walkerId, new RealWalker(nodeId, System.currentTimeMillis() + ttlMillis));
+        return true;
+    }
+
+    public void removeWalker(String walkerId) {
+        walkers.remove(walkerId);
+    }
+
+    /** Live attendees, expired ones excluded. Cheap enough to call on the tick thread. */
+    public int walkerCount() {
+        long now = System.currentTimeMillis();
+        walkers.values().removeIf(walker -> walker.expiresAtMillis() <= now);
+        return walkers.size();
     }
 
     public boolean isFinished() {

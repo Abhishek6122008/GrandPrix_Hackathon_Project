@@ -1,0 +1,47 @@
+name: crowdflow_walker
+description: Crowd Flow Optimiser — the attendee app. Live zone congestion and a way out.
+publish_to: none
+version: 0.1.0
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Position stream with a distance filter, the permission state machine, and — the one that
+  # matters — a reported accuracy in metres on every fix, which the gate is built on.
+  geolocator: ^13.0.1
+
+  # One shared Client, so keep-alive is amortised across four endpoints. dio would bring
+  # retries and interceptors for four calls that need neither.
+  http: ^1.2.2
+
+  # Persists the generated walker id, so restarting the app does not leave a ghost attendee
+  # ageing out in the venue, and the last session id so a returning walker skips the typing.
+  shared_preferences: ^2.3.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
+
+# Deliberately absent:
+#
+#   flutter_map / google_maps — there is no basemap to put under this. The venue is an abstract
+#     coordinate space, and satellite tiles beneath a stylised layout would misalign wherever
+#     the anchor fit is imperfect, advertising a precision the system does not have. Everything
+#     drawn here is polygons, polylines and dots, which is what CustomPainter is for.
+#
+#   json_serializable / build_runner — three response shapes and about forty lines of
+#     fromJson. The build config would be longer than the code it generated.
+#
+#   provider / riverpod / bloc — one ChangeNotifier and one screen that listens to it. The web
+#     app uses no state library either.
+#
+#   mockito — the two things worth faking are a permission check and an HTTP client. The first
+#     is a function passed to a constructor; the second is MockClient, which ships with http.

@@ -36,6 +36,13 @@ session:
   max-people-in-frame: 600
   # Density snapshots retained per session, and the slice sent to the AI layer.
   history-window: 120
+  # How long a real attendee's reported zone counts without a fresh fix. The mobile app sends a
+  # heartbeat every 20s even when stationary, so this is ~1.5 missed reports — long enough to
+  # survive a tunnel, short enough that a closed app clears within a couple of broadcasts.
+  walker-ttl-ms: 30000
+  # Ceiling on real attendees per session. The ingest endpoint is unauthenticated like the rest
+  # of this API, so this bounds what a script can do rather than pretending it cannot happen.
+  max-walkers: 2000
   # Max text frame the WebSocket accepts. Well above the 8KB servlet default, which closes
   # the connection on an oversized frame rather than truncating it.
   socket-buffer-bytes: 524288

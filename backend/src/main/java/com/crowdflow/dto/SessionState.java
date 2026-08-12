@@ -30,6 +30,18 @@ public record SessionState(
         String aiStatus,
         Metrics metrics) {
 
+    /**
+     * The same frame with agent positions dropped, for clients that never draw them.
+     *
+     * <p>{@code sampledFrom} is left alone on purpose: it is the true crowd size, not the size of
+     * the list, so a client reading it still knows how many people are in the venue.
+     */
+    public SessionState withoutPeople() {
+        return new SessionState(sessionId, venueId, tick, simulationSeconds, status,
+                List.of(), sampledFrom, nodes, alerts, reroutes, predictedRisk, advisory,
+                aiStatus, metrics);
+    }
+
     /** @param rerouted true once this person has been diverted at least once */
     public record PersonState(String id, double x, double y, String nodeId, String type, boolean rerouted) {
     }
@@ -57,6 +69,7 @@ public record SessionState(
             double peakDensity,
             int criticalNodeTicks,
             int activeAlerts,
-            int viewers) {
+            int viewers,
+            int realWalkers) {
     }
 }

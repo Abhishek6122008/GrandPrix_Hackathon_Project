@@ -77,6 +77,19 @@ export const api = {
   getVenueRoute: (id, fromNodeId) =>
     request(`/venues/${id}/route?from=${encodeURIComponent(fromNodeId)}`),
 
+  /**
+   * Ties a venue's layout to real coordinates, so the mobile app can turn a GPS fix into a zone.
+   *
+   * Three anchors, because two cannot distinguish a rotation from its mirror image — and since
+   * venue y runs downward while north runs up, the mirrored fit is the one a two-point solve
+   * tends to pick. See docs/api-contract.md.
+   */
+  setGeoref: (id, anchors) =>
+    request(`/venues/${id}/georef`, { method: 'PUT', body: JSON.stringify({ anchors }) }),
+  /** 404 here means "this venue has no GPS", which is the ordinary case rather than an error. */
+  getGeoref: (id) => request(`/venues/${id}/georef`),
+  clearGeoref: (id) => request(`/venues/${id}/georef`, { method: 'DELETE' }),
+
   health: () => request('/health'),
 };
 

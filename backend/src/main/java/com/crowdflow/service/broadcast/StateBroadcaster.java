@@ -98,7 +98,10 @@ public class StateBroadcaster {
     /** The frame itself: people, densities, alerts, reroutes, risk, advisory, metrics, clock. */
     public SessionState prepare(Session session, Map<String, Double> densities,
                                 Map<String, Alert.Trend> trends) {
-        Map<String, Integer> occupancy = session.occupancy();
+        // liveOccupancy, not occupancy: the frame's per-node count has to agree with the
+        // density beside it, and both include real attendees. The comparison numbers are taken
+        // separately in SessionManager.advance from the simulated agents alone.
+        Map<String, Integer> occupancy = session.liveOccupancy();
         Map<String, Double> risk = session.getPredictedRisk();
 
         List<SessionState.NodeDensity> nodes = new ArrayList<>();
@@ -123,7 +126,8 @@ public class StateBroadcaster {
                 Math.round(session.getPeakDensity() * 100) / 100.0,
                 session.getCriticalNodeTicks(),
                 activeAlerts,
-                viewerCount(session.getId()));
+                viewerCount(session.getId()),
+                session.walkerCount());
 
         return new SessionState(
                 session.getId(),

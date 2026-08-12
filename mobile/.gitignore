@@ -1,0 +1,19 @@
+# Flutter/Dart build output and tooling state.
+.dart_tool/
+.packages
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+pubspec.lock
+
+# Generated platform folders. `flutter create .` regenerates these from pubspec, and they are
+# large, machine-specific and full of absolute paths.
+android/
+ios/
+linux/
+macos/
+windows/
+web/
+
+*.iml
+.idea/

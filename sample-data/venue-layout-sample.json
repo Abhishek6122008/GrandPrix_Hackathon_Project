@@ -1,30 +1,172 @@
 {
   "id": "venue-sample",
-  "name": "Grandprix Arena — North Wing",
+  "name": "Grandprix Arena \u2014 North Wing",
   "nodes": [
-    { "id": "gate-a", "name": "Gate A", "type": "GATE", "capacity": 320, "x": 70, "y": 105 },
-    { "id": "gate-b", "name": "Gate B", "type": "GATE", "capacity": 320, "x": 70, "y": 335 },
-    { "id": "walk-north", "name": "North Walkway", "type": "WALKWAY", "capacity": 500, "x": 250, "y": 105 },
-    { "id": "walk-south", "name": "South Walkway", "type": "WALKWAY", "capacity": 500, "x": 250, "y": 335 },
-    { "id": "food-court", "name": "Food Court", "type": "CONCESSION", "capacity": 180, "x": 300, "y": 30 },
-    { "id": "merch", "name": "Merch Stand", "type": "CONCESSION", "capacity": 90, "x": 300, "y": 405 },
-    { "id": "stand-lower", "name": "Lower Stand", "type": "SEATING", "capacity": 900, "x": 530, "y": 220 },
-    { "id": "concourse", "name": "East Concourse", "type": "WALKWAY", "capacity": 450, "x": 790, "y": 220 },
-    { "id": "exit-east", "name": "Exit East", "type": "EXIT", "capacity": 400, "x": 950, "y": 105 },
-    { "id": "exit-south", "name": "Exit South", "type": "EXIT", "capacity": 260, "x": 950, "y": 330 }
+    {
+      "id": "gate-a",
+      "name": "Gate A",
+      "type": "GATE",
+      "capacity": 320,
+      "x": 70,
+      "y": 105
+    },
+    {
+      "id": "gate-b",
+      "name": "Gate B",
+      "type": "GATE",
+      "capacity": 320,
+      "x": 70,
+      "y": 335
+    },
+    {
+      "id": "walk-north",
+      "name": "North Walkway",
+      "type": "WALKWAY",
+      "capacity": 500,
+      "x": 250,
+      "y": 105
+    },
+    {
+      "id": "walk-south",
+      "name": "South Walkway",
+      "type": "WALKWAY",
+      "capacity": 500,
+      "x": 250,
+      "y": 335
+    },
+    {
+      "id": "food-court",
+      "name": "Food Court",
+      "type": "CONCESSION",
+      "capacity": 180,
+      "x": 300,
+      "y": 30
+    },
+    {
+      "id": "merch",
+      "name": "Merch Stand",
+      "type": "CONCESSION",
+      "capacity": 90,
+      "x": 300,
+      "y": 405
+    },
+    {
+      "id": "stand-lower",
+      "name": "Lower Stand",
+      "type": "SEATING",
+      "capacity": 900,
+      "x": 530,
+      "y": 220
+    },
+    {
+      "id": "concourse",
+      "name": "East Concourse",
+      "type": "WALKWAY",
+      "capacity": 450,
+      "x": 790,
+      "y": 220
+    },
+    {
+      "id": "exit-east",
+      "name": "Exit East",
+      "type": "EXIT",
+      "capacity": 400,
+      "x": 950,
+      "y": 105
+    },
+    {
+      "id": "exit-south",
+      "name": "Exit South",
+      "type": "EXIT",
+      "capacity": 260,
+      "x": 950,
+      "y": 330
+    }
   ],
   "edges": [
-    { "from": "gate-a", "to": "walk-north", "length": 25, "width": 6, "bidirectional": true },
-    { "from": "gate-b", "to": "walk-south", "length": 25, "width": 6, "bidirectional": true },
-    { "from": "walk-north", "to": "walk-south", "length": 30, "width": 5, "bidirectional": true },
-    { "from": "walk-north", "to": "food-court", "length": 20, "width": 4, "bidirectional": true },
-    { "from": "walk-north", "to": "stand-lower", "length": 28, "width": 7, "bidirectional": true },
-    { "from": "walk-south", "to": "merch", "length": 22, "width": 3, "bidirectional": true },
-    { "from": "walk-south", "to": "stand-lower", "length": 26, "width": 7, "bidirectional": true },
-    { "from": "food-court", "to": "concourse", "length": 30, "width": 5, "bidirectional": true },
-    { "from": "merch", "to": "concourse", "length": 32, "width": 3, "bidirectional": true },
-    { "from": "stand-lower", "to": "concourse", "length": 24, "width": 9, "bidirectional": true },
-    { "from": "concourse", "to": "exit-east", "length": 18, "width": 8, "bidirectional": true },
-    { "from": "concourse", "to": "exit-south", "length": 20, "width": 5, "bidirectional": true }
+    {
+      "from": "gate-a",
+      "to": "walk-north",
+      "length": 180,
+      "width": 6,
+      "bidirectional": true
+    },
+    {
+      "from": "gate-b",
+      "to": "walk-south",
+      "length": 180,
+      "width": 6,
+      "bidirectional": true
+    },
+    {
+      "from": "walk-north",
+      "to": "walk-south",
+      "length": 230,
+      "width": 5,
+      "bidirectional": true
+    },
+    {
+      "from": "walk-north",
+      "to": "food-court",
+      "length": 90,
+      "width": 4,
+      "bidirectional": true
+    },
+    {
+      "from": "walk-north",
+      "to": "stand-lower",
+      "length": 303,
+      "width": 7,
+      "bidirectional": true
+    },
+    {
+      "from": "walk-south",
+      "to": "merch",
+      "length": 86,
+      "width": 3,
+      "bidirectional": true
+    },
+    {
+      "from": "walk-south",
+      "to": "stand-lower",
+      "length": 303,
+      "width": 7,
+      "bidirectional": true
+    },
+    {
+      "from": "food-court",
+      "to": "concourse",
+      "length": 526,
+      "width": 5,
+      "bidirectional": true
+    },
+    {
+      "from": "merch",
+      "to": "concourse",
+      "length": 524,
+      "width": 3,
+      "bidirectional": true
+    },
+    {
+      "from": "stand-lower",
+      "to": "concourse",
+      "length": 260,
+      "width": 9,
+      "bidirectional": true
+    },
+    {
+      "from": "concourse",
+      "to": "exit-east",
+      "length": 197,
+      "width": 8,
+      "bidirectional": true
+    },
+    {
+      "from": "concourse",
+      "to": "exit-south",
+      "length": 194,
+      "width": 5,
+      "bidirectional": true
+    }
   ]
 }

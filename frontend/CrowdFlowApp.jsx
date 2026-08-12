@@ -17,7 +17,7 @@ import {
   Network, Gauge, Layers, ShieldCheck, Boxes, GitBranch, Check, Plus,
   MapPin, Navigation, Crosshair, Upload, Building2, UserCog, Ticket,
   Plus as PlusIcon, Minus as MinusIcon, Locate, Search, Bell, Trash2,
-  Eye, Lock, Mail, ArrowRight, Wifi, WifiOff, Droplets, Coffee,
+  Eye, Lock, Mail, ArrowRight, Wifi, WifiOff, Droplets, Coffee, Smartphone,
 } from "lucide-react";
 
 /* ============================================================================
@@ -2263,6 +2263,155 @@ function SessionControls({ info, busy, onStart, onPause, onStop, connected }) {
   );
 }
 
+/**
+ * Ties a venue's layout to real coordinates, so the mobile app can turn a GPS fix into a zone.
+ *
+ * Three anchors. Two would seem enough — a similarity has four degrees of freedom and two points
+ * give four equations — but a rotation and its mirror image fit two points equally well, and
+ * since venue y runs downward while north runs up, the mirrored one is usually what a two-point
+ * solve picks. The result fits both anchors perfectly and sends people to the gate diagonally
+ * opposite. The third anchor settles handedness from the data.
+ *
+ * Deliberately typed rather than walked: coordinates for three known gates can be read off any
+ * map app in a minute, which unblocks the demo without anybody standing in the building. A
+ * "stand here, tap" capture mode belongs in the phone app, later.
+ */
+function GeorefPanel({ venue }) {
+  const zones = venue.halls;
+  const [rows, setRows] = useState(() => [0, 1, 2].map((i) => ({
+    // Gates and exits first: zone radius comes from capacity, so those are the smallest and the
+    // easiest to stand in the middle of. Anchor placement error is the ceiling on the accuracy
+    // of this whole feature.
+    nodeId: (zones.filter((z) => z.type === "GATE" || z.type === "EXIT")[i] ?? zones[i])?.id ?? "",
+    lat: "",
+    lng: "",
+  })));
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.getGeoref(venue.id)
+      .then((georef) => { if (!cancelled) setResult(georef); })
+      // 404 is the ordinary answer — most venues have no georeference and never will.
+      .catch(() => { if (!cancelled) setResult(null); });
+    return () => { cancelled = true; };
+  }, [venue.id]);
+
+  const setRow = (i, patch) =>
+    setRows((current) => current.map((row, j) => (j === i ? { ...row, ...patch } : row)));
+
+  const save = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const anchors = rows.map((row) => ({
+        nodeId: row.nodeId,
+        lat: Number(row.lat),
+        lng: Number(row.lng),
+      }));
+      if (anchors.some((a) => !a.nodeId || !Number.isFinite(a.lat) || !Number.isFinite(a.lng))) {
+        setError("Every anchor needs a zone and a numeric latitude and longitude.");
+        return;
+      }
+      setResult(await api.setGeoref(venue.id, anchors));
+    } catch (cause) {
+      // The backend's messages name the measurement that failed and the value it needed, which
+      // is far more useful than anything this form could work out for itself.
+      setError(cause.message);
+      setResult(null);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const clear = async () => {
+    setBusy(true);
+    try {
+      await api.clearGeoref(venue.id);
+      setResult(null);
+      setError(null);
+    } catch (cause) {
+      setError(cause.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="cf-card rounded-2xl p-6">
+      <div className="cf-display font-bold uppercase text-lg tracking-wide mb-2">
+        GPS reference
+      </div>
+      <p className="text-sm cf-dim leading-relaxed mb-5">
+        Stand in three zones and record the coordinates your phone reports, or read them off a map
+        app. Attendees on the mobile app can then be placed automatically instead of tapping their
+        zone. Without this the app still works — it just asks people where they are.
+      </p>
+
+      {result ? (
+        <div className="cf-card-solid rounded-xl p-4 mb-5">
+          <div className="flex items-center gap-2 mb-2">
+            <Check className="w-4 h-4" style={{ color: "var(--cf-green)" }} strokeWidth={2.5} />
+            <span className="text-sm font-semibold">This venue is georeferenced</span>
+          </div>
+          <div className="cf-mono text-[11px] cf-dim2">
+            {result.scaleRatio?.toFixed(2)} layout units per metre · {result.shearDegrees?.toFixed(1)}° shear
+          </div>
+          {/* Reported, not enforced. A stylised layout genuinely has some shear, and the person
+              who drew it is better placed than the server to judge how much is too much. */}
+          {result.shearDegrees > 15 && (
+            <div className="cf-mono text-[11px] mt-2" style={{ color: "var(--cf-amber)" }}>
+              High shear — the fit may be absorbing anchor error. Check the three readings.
+            </div>
+          )}
+          <button onClick={clear} disabled={busy}
+            className="cf-focus cf-btn-outline rounded-lg px-3 py-1.5 cf-accent text-[10px] mt-3">
+            REMOVE
+          </button>
+        </div>
+      ) : (
+        <div className="cf-mono text-[11px] cf-dim2 mb-5">
+          NOT SET · the app will ask attendees to tap their zone
+        </div>
+      )}
+
+      <div className="flex flex-col gap-3">
+        {rows.map((row, i) => (
+          <div key={i} className="grid grid-cols-[1fr_7rem_7rem] gap-2">
+            <select value={row.nodeId} onChange={(e) => setRow(i, { nodeId: e.target.value })}
+              className="cf-input cf-focus rounded-lg px-3 py-2 text-sm">
+              {zones.map((zone) => (
+                <option key={zone.id} value={zone.id}>{zone.name}</option>
+              ))}
+            </select>
+            <input value={row.lat} onChange={(e) => setRow(i, { lat: e.target.value })}
+              placeholder="lat" inputMode="decimal"
+              className="cf-input cf-focus rounded-lg px-3 py-2 text-sm cf-mono" />
+            <input value={row.lng} onChange={(e) => setRow(i, { lng: e.target.value })}
+              placeholder="lng" inputMode="decimal"
+              className="cf-input cf-focus rounded-lg px-3 py-2 text-sm cf-mono" />
+          </div>
+        ))}
+      </div>
+
+      <p className="cf-mono text-[10px] cf-dim2 mt-3 leading-relaxed">
+        USE GATES AND EXITS. A zone's radius comes from its capacity, so a gate is a few metres
+        across and a large stand is tens — and how close to a zone's centre you stood is the limit
+        on how accurate any of this can be.
+      </p>
+
+      <ErrorNote error={error} />
+
+      <button onClick={save} disabled={busy}
+        className="cf-focus cf-btn-primary rounded-xl px-5 py-3 cf-display font-bold uppercase text-sm tracking-wide w-full mt-4 disabled:opacity-50">
+        {busy ? "Saving…" : result ? "Replace anchors" : "Set anchors"}
+      </button>
+    </div>
+  );
+}
+
 function ClientApp({ session, navigate, signOut }) {
   const [tab, setTab] = useState("Live");
   const [upload, setUpload] = useState(null);
@@ -2282,7 +2431,7 @@ function ClientApp({ session, navigate, signOut }) {
 
   return (
     <PortalShell role="client" session={session} navigate={navigate} signOut={signOut}
-      tabs={["Live", "Floor plans", "Halls"]} active={tab} setActive={setTab}>
+      tabs={["Live", "Floor plans", "GPS", "Halls"]} active={tab} setActive={setTab}>
 
       {tab === "Live" && !venue && (
         <SessionSetup onCreate={flow.create} busy={busy} error={error} />
@@ -2334,6 +2483,16 @@ function ClientApp({ session, navigate, signOut }) {
               <div className="cf-mono text-[11px] cf-dim2 mb-4">
                 OF {venue.capacity.toLocaleString()} CAPACITY · {metrics?.exited ?? 0} LEFT
               </div>
+              {/* Real attendees are counted apart from simulated agents, never folded in. An
+                  operator looking at a busy zone has to be able to tell how much of it is people
+                  with phones and how much is the model — they are not the same evidence. */}
+              {(metrics?.realWalkers ?? 0) > 0 && (
+                <div className="cf-mono text-[11px] mb-4 flex items-center gap-1.5"
+                  style={{ color: "var(--cf-blue-hi)" }}>
+                  <Smartphone className="w-3.5 h-3.5" strokeWidth={2} />
+                  {metrics.realWalkers.toLocaleString()} REAL {metrics.realWalkers === 1 ? "ATTENDEE" : "ATTENDEES"} ON THE APP
+                </div>
+              )}
               <div className="h-2 rounded-full bg-white/5 overflow-hidden">
                 <div className="h-full rounded-full" style={{
                   width: `${Math.min(100, ((metrics?.peopleInside ?? 0) / Math.max(1, venue.capacity)) * 100)}%`,
@@ -2449,8 +2608,17 @@ function ClientApp({ session, navigate, signOut }) {
               </div>
             )}
           </div>
+
         </div>
       )}
+
+      {tab === "GPS" && !venue && (
+        <div className="cf-card rounded-2xl px-6 py-14 text-center">
+          <p className="text-sm cf-dim">Create a session on the Live tab to georeference its venue.</p>
+        </div>
+      )}
+
+      {tab === "GPS" && venue && <GeorefPanel venue={venue} />}
 
       {tab === "Halls" && !venue && (
         <div className="cf-card rounded-2xl px-6 py-14 text-center">

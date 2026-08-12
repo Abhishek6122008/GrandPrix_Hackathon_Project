@@ -3,15 +3,21 @@ package com.crowdflow.service.session;
 import com.crowdflow.client.FastApiClient;
 import com.crowdflow.dto.CreateSessionRequest;
 import com.crowdflow.dto.SessionSummary;
+import com.crowdflow.dto.WalkerFix;
+import com.crowdflow.dto.WalkerPlacement;
 import com.crowdflow.model.Alert;
 import com.crowdflow.model.ReroutePath;
 import com.crowdflow.model.Session;
 import com.crowdflow.model.Venue;
+import com.crowdflow.model.VenueGeoref;
+import com.crowdflow.model.VenueNode;
+import com.crowdflow.repository.GeorefRepository;
 import com.crowdflow.repository.SessionRepository;
 import com.crowdflow.repository.VenueRepository;
 import com.crowdflow.service.VenueValidator;
 import com.crowdflow.service.broadcast.StateBroadcaster;
 import com.crowdflow.service.detection.DensityDetector;
+import com.crowdflow.service.geo.Georef;
 import com.crowdflow.service.routing.RerouteEngine;
 import com.crowdflow.service.simulation.SimulationEngine;
 import java.util.ArrayList;
@@ -57,9 +63,13 @@ public class SessionManager {
     private final int broadcastEveryTicks;
     private final double criticalThreshold;
     private final long retainAfterFinishMs;
+    private final long walkerTtlMs;
+    private final int maxWalkers;
 
     /** Nodes already rerouted around, per session — so one jam does not re-plan every tick. */
     private final Map<String, Set<String>> reroutedNodes = new ConcurrentHashMap<>();
+
+    private final GeorefRepository georefs;
 
     public SessionManager(SessionRepository sessions, VenueRepository venues, SimulationEngine engine,
                           DensityDetector detector, RerouteEngine routeEngine,
@@ -67,7 +77,10 @@ public class SessionManager {
                           @Value("${session.history-window:120}") int historyWindow,
                           @Value("${session.broadcast-every-ticks:2}") int broadcastEveryTicks,
                           @Value("${simulation.critical-threshold:0.85}") double criticalThreshold,
-                          @Value("${session.retain-after-finish-ms:600000}") long retainAfterFinishMs) {
+                          @Value("${session.retain-after-finish-ms:600000}") long retainAfterFinishMs,
+                          @Value("${session.walker-ttl-ms:30000}") long walkerTtlMs,
+                          @Value("${session.max-walkers:2000}") int maxWalkers,
+                          GeorefRepository georefs) {
         this.sessions = sessions;
         this.venues = venues;
         this.engine = engine;
@@ -79,6 +92,9 @@ public class SessionManager {
         this.broadcastEveryTicks = Math.max(1, broadcastEveryTicks);
         this.criticalThreshold = criticalThreshold;
         this.retainAfterFinishMs = retainAfterFinishMs;
+        this.walkerTtlMs = walkerTtlMs;
+        this.maxWalkers = maxWalkers;
+        this.georefs = georefs;
     }
 
     // --- lifecycle --------------------------------------------------------
@@ -160,6 +176,72 @@ public class SessionManager {
         return sessions.getOrThrow(id);
     }
 
+    // --- real attendees ---------------------------------------------------
+
+    /**
+     * Records where a real attendee is, from a GPS fix or from the zone they tapped.
+     *
+     * <p>Runs on the request thread and touches only the session's concurrent walker map, so it
+     * never contends with the tick. The result is visible to the next {@code liveOccupancy()},
+     * which the tick calls a few milliseconds later.
+     *
+     * <p>A fix that cannot be placed — between zones, outside the venue, or too inaccurate to
+     * support the claim — <em>removes</em> the walker rather than parking them in a nullable
+     * zone. Somebody the system cannot locate should not be counted anywhere.
+     */
+    public WalkerPlacement placeWalker(String sessionId, String walkerId, WalkerFix fix) {
+        Session session = sessions.getOrThrow(sessionId);
+        if (session.isShadow()) {
+            // Twins are hidden from GET /sessions for the same reason: they are an implementation
+            // detail of the comparison, and writing to one would corrupt it.
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "No session " + sessionId);
+        }
+
+        WalkerPlacement placement = resolve(session, walkerId, fix);
+
+        if (!placement.counts()) {
+            session.removeWalker(walkerId);
+            return placement;
+        }
+        if (!session.placeWalker(walkerId, placement.nodeId(), walkerTtlMs, maxWalkers)) {
+            throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS,
+                    "Session %s is already tracking %d attendees".formatted(sessionId, maxWalkers));
+        }
+        return placement;
+    }
+
+    private WalkerPlacement resolve(Session session, String walkerId, WalkerFix fix) {
+        Venue venue = session.getVenue();
+        long ttlSeconds = walkerTtlMs / 1000;
+
+        if (fix.isManual()) {
+            VenueNode node = venue.nodesById().get(fix.nodeId());
+            if (node == null) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Venue %s has no node '%s'".formatted(venue.id(), fix.nodeId()));
+            }
+            return new WalkerPlacement(walkerId, node.id(), WalkerPlacement.State.MANUAL,
+                    node.x(), node.y(), 0, ttlSeconds);
+        }
+
+        if (!fix.isGps()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Send either { lat, lng, accuracyMetres } or { nodeId }");
+        }
+
+        VenueGeoref georef = georefs.findByVenueId(venue.id()).orElseThrow(() ->
+                new ResponseStatusException(HttpStatus.CONFLICT,
+                        ("Venue %s is not georeferenced; send { \"nodeId\": ... } instead, or set "
+                                + "anchors with PUT /venues/%s/georef").formatted(venue.id(), venue.id())));
+
+        return Georef.locate(walkerId, venue, georef, fix.lat(), fix.lng(), fix.accuracyMetres(),
+                ttlSeconds);
+    }
+
+    public void removeWalker(String sessionId, String walkerId) {
+        sessions.getOrThrow(sessionId).removeWalker(walkerId);
+    }
+
     /** Live and recently finished sessions, newest first. Baseline twins are not listed. */
     public List<Session> list() {
         return sessions.findAll().stream()
@@ -202,8 +284,19 @@ public class SessionManager {
     private void advance(Session session) {
         engine.step(session);
 
-        Map<String, Double> densities = detector.densitiesOf(session);
-        session.recordDensities(densities, criticalThreshold);
+        // The whole split between "what is compared" and "what is shown", in three lines.
+        //
+        // recordDensities feeds peakDensity and criticalNodeTicks, which SessionSummary compares
+        // against the baseline twin. The twin has no real attendees, so a phone standing in a
+        // gate must not reach these totals — it would show up on the optimised side only and the
+        // narrative would report that rerouting made things worse. Everything after this point
+        // sees the venue as it actually is, phones included.
+        Map<String, Double> simulated = detector.densitiesOf(session);
+        session.recordDensities(simulated, criticalThreshold);
+
+        Map<String, Double> densities = session.walkerCount() == 0
+                ? simulated
+                : detector.liveDensitiesOf(session);
         appendHistory(session, densities);
 
         Map<String, Alert.Trend> trends = detector.trendsOf(session, densities);

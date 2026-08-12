@@ -18,7 +18,7 @@ Large venues and events — stadiums, railway stations, festivals — see people
 
 | Layer | Technology |
 |---|---|
-| Frontend | React (website, not mobile app) |
+| Frontend | React website, plus a Flutter attendee app in  |
 | Frontend animation | 21st.dev-style motion components |
 | Frontend visuals | Pixel-art tileset + crowd sprites, generated via the PixelLab MCP server |
 | UI/design | Claude Design |
@@ -181,7 +181,8 @@ doing would be worse than none.
 crowd-flow-optimiser/
 ├── frontend/        # React website (+ src/assets/pixel-art/ tileset and sprites)
 ├── backend/         # Spring Boot
-├── ml-service/      # FastAPI self-hosted model serving (port 8000)
+├── ai-service/      # FastAPI self-hosted model serving (port 8000)
+├── mobile/          # Flutter attendee app (optional; needs only the backend)
 ├── ml/              # training, synthetic data, HF Hub export
 ├── sample-data/     # test venue layouts and schedules
 └── docs/            # system design, API contract, demo script
