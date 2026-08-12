@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Real credentials. The .env.example templates are fine and are not matched by these.
+.env
+.env.local
+
+tests/

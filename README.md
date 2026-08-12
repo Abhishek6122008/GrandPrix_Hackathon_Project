@@ -24,13 +24,27 @@ an estimate.
 | [`frontend/`](frontend/) | React + Vite. Three portals over one live map. Port **5173**. |
 | [`ml/`](ml/) | Model training and export to the Hugging Face Hub. Not needed to run the app. |
 | [`sample-data/`](sample-data/) | A ready-made venue layout and event schedule. |
-| [`docs/`](docs/) | API contract, system design, auth and database, demo script. |
+| [`ci/`](ci/) | Jenkins, itself in a container. Not needed to run the app. |
+| [`docs/`](docs/) | API contract, system design, auth and database, CI/CD, demo script. |
 
 ---
 
 ## Running it
 
-Three processes. Start them in any order — each degrades gracefully while the others are down.
+**In one command, if you have Docker:**
+
+```bash
+docker compose up --build
+```
+
+That brings up Postgres, the AI service, the backend and the built frontend together —
+<http://localhost:5173>. It runs the backend under its cloud profile against Postgres, which is
+the shape a deployment has rather than the shape a laptop has. See
+[`docs/ci-cd.md`](docs/ci-cd.md) for the configuration, and for the Jenkins pipeline that builds
+and tests all of it.
+
+**Or run the three processes directly**, which is the better loop for development. Start them in
+any order — each degrades gracefully while the others are down.
 
 ### 1. AI service (port 8000)
 

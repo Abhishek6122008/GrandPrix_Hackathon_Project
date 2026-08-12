@@ -33,3 +33,8 @@ ml/out/
 # JVM crash dumps. Written next to wherever java was launched from.
 hs_err_pid*.log
 replay_pid*.log
+
+# CI scratch. The pipeline builds these in the workspace; none of it is source.
+ai-service/.venv-ci/
+ai-service/pytest-results.xml
+compose-logs.txt
