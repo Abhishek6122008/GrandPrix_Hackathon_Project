@@ -1,0 +1,8 @@
+node_modules/
+dist/
+
+.env
+.env.local
+
+# Smoke tests run in their own Jenkins stage against the source tree, not from the image.
+smoke.*.mjs

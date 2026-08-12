@@ -1,0 +1,38 @@
+# syntax=docker/dockerfile:1
+FROM python:3.11-slim
+WORKDIR /app
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# Whether to install the layout→graph pipeline (OpenCV, scikit-image, RapidOCR).
+#
+# Build with --build-arg WITH_LAYOUT=false for a much smaller image that still serves /analyze;
+# /layout/* then reports layout.available=false at /health and the UI says AI tracing is
+# unavailable, which is the documented degradation rather than a broken service.
+ARG WITH_LAYOUT=true
+
+# libglib2.0-0 is the one system library opencv-python-headless still links against — without
+# it `import cv2` fails at runtime, not at build, so the image looks fine until a plan is
+# uploaded. curl is here for HEALTHCHECK; slim ships neither.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends libglib2.0-0 curl \
+ && rm -rf /var/lib/apt/lists/*
+
+# Requirements before source, so editing app/ does not reinstall the dependency tree.
+COPY requirements.txt requirements-layout.txt ./
+RUN pip install --no-cache-dir -r requirements.txt \
+ && if [ "$WITH_LAYOUT" = "true" ]; then pip install --no-cache-dir -r requirements-layout.txt; fi
+
+COPY app ./app
+
+RUN useradd --create-home --uid 1001 crowdflow && chown -R crowdflow:crowdflow /app
+USER crowdflow
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=15s --timeout=3s --start-period=20s --retries=5 \
+  CMD curl -fsS http://127.0.0.1:8000/health >/dev/null || exit 1
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

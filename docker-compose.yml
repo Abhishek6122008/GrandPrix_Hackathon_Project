@@ -1,0 +1,96 @@
+# The whole stack: Postgres, the AI service, the backend and the built frontend.
+#
+#   docker compose up --build
+#   -> frontend  http://localhost:5173
+#      backend   http://localhost:8080/health
+#      AI        http://localhost:8000/health
+#
+# This runs the backend under its **cloud** profile against Postgres, which is the shape a real
+# deployment has. Running it locally with ./mvnw instead uses the H2 file and needs none of
+# this — see the README. Both read the same Flyway migrations, which is the point.
+name: crowdflow
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: crowdflow
+      POSTGRES_USER: crowdflow
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-crowdflow-local-only}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    # The backend waits on this rather than on the port opening. Postgres briefly accepts
+    # connections during init and then restarts, so "port is open" is not "database is ready" —
+    # a backend that starts on the first signal loses the race and dies in Flyway.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U crowdflow -d crowdflow"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+
+  ai-service:
+    build:
+      context: ./ai-service
+      args:
+        WITH_LAYOUT: ${WITH_LAYOUT:-true}
+    environment:
+      # Nothing required. With no HF token and no model configured the service answers from
+      # app/scoring.py, which is exactly how a clean checkout runs.
+      HF_API_TOKEN: ${HF_API_TOKEN:-}
+    ports:
+      - "${AI_PORT:-8000}:8000"
+    restart: unless-stopped
+
+  backend:
+    build: ./backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ai-service:
+        # Deliberately not service_healthy. The backend is designed to run with the AI layer
+        # down — blocking startup on it would invent a dependency the architecture does not
+        # have, and would turn a degraded demo into no demo.
+        condition: service_started
+    environment:
+      SPRING_PROFILES_ACTIVE: cloud
+      DB_URL: jdbc:postgresql://postgres:5432/crowdflow
+      DB_USERNAME: crowdflow
+      DB_PASSWORD: ${DB_PASSWORD:-crowdflow-local-only}
+
+      # Must not be the committed development default — the cloud profile refuses to start on
+      # it, on purpose. This one is fine for a laptop and worthless anywhere else.
+      AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:-compose-local-only-secret-change-before-deploying-0000}
+
+      ML_SERVICE_URL: http://ai-service:8000
+
+      # The browser talks to the backend from the host, so the origin it presents is the host's
+      # frontend port, not the container's.
+      CORS_ALLOWED_ORIGINS: http://localhost:5173,http://127.0.0.1:5173
+
+      # Both empty by default: no admin exists unless you ask for one. Set them in .env to seed
+      # one at boot (the password must be 8+ chars with a letter and a number).
+      AUTH_ADMIN_EMAILS: ${AUTH_ADMIN_EMAILS:-}
+      AUTH_ADMIN_PASSWORD: ${AUTH_ADMIN_PASSWORD:-}
+    ports:
+      - "${BACKEND_PORT:-8080}:8080"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      # Baked in at build time by Vite, so these are build args and not environment. Changing
+      # where the API lives means rebuilding this image.
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8080}
+        VITE_WS_BASE_URL: ${VITE_WS_BASE_URL:-ws://localhost:8080}
+        VITE_AI_SERVICE_URL: ${VITE_AI_SERVICE_URL:-http://localhost:8000}
+    depends_on:
+      - backend
+    ports:
+      - "${FRONTEND_PORT:-5173}:80"
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
