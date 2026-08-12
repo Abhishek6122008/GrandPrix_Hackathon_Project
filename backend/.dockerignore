@@ -1,0 +1,18 @@
+# Build context hygiene. Everything here is either rebuilt inside the image, secret, or
+# large enough that shipping it to the daemon dominates the build time.
+
+# A local JDK someone unpacked inside the module — 373MB of binaries the image never uses.
+oracleJdk-*/
+
+target/
+data/
+
+# Never. It is gitignored for the same reason, and a COPY . would otherwise bake the SMTP
+# app password and the admin password into an image layer that survives deletion.
+secrets.yml
+
+.mvn/wrapper/maven-wrapper.jar
+*.iml
+.idea/
+hs_err_pid*.log
+replay_pid*.log
