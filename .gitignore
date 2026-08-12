@@ -34,6 +34,16 @@ ml/out/
 hs_err_pid*.log
 replay_pid*.log
 
+# Agent tooling installed per-machine by `npx skills add`. Third-party skills that run with
+# full agent permissions, so they are a personal choice rather than a project dependency —
+# same reasoning as .mcp.json above.
+.agents/
+.claude/
+skills-lock.json
+
+# Downloaded archives. Nothing in this repo is delivered as one.
+*.zip
+
 # CI scratch. The pipeline builds these in the workspace; none of it is source.
 ai-service/.venv-ci/
 ai-service/pytest-results.xml
