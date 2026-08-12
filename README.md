@@ -19,20 +19,35 @@ an estimate.
 
 | Path | What it is |
 |---|---|
-| [`backend/`](backend/) | Spring Boot. Sessions, the agent simulation, density detection, rerouting, WebSocket broadcast. Port **8080**. |
+| [`backend/`](backend/) | Spring Boot. Accounts, sessions, the agent simulation, density detection, rerouting, WebSocket broadcast. Port **8080**. |
 | [`ai-service/`](ai-service/) | Python FastAPI. Per-zone risk prediction and the operator advisory. Port **8000**. |
 | [`frontend/`](frontend/) | React + Vite. Three portals over one live map. Port **5173**. |
 | [`ml/`](ml/) | Model training and export to the Hugging Face Hub. Not needed to run the app. |
 | [`sample-data/`](sample-data/) | A ready-made venue layout and event schedule. |
 | [`mobile/`](mobile/) | Flutter attendee app. Live zone congestion, route to the nearest exit, optional GPS. |
-| [`docs/`](docs/) | API contract, system design, demo script. |
+| [`ci/`](ci/) | Jenkins, itself in a container. Not needed to run the app. |
+| [`docs/`](docs/) | API contract, system design, auth and database, CI/CD, demo script. |
 
 ---
 
 ## Running it
 
-Three processes for the web stack. Start them in any order — each degrades gracefully while the
-others are down. The mobile app is optional and needs only the backend; see [`mobile/`](mobile/).
+**In one command, if you have Docker:**
+
+```bash
+docker compose up --build
+```
+
+That brings up Postgres, the AI service, the backend and the built frontend together —
+<http://localhost:5173>. It runs the backend under its cloud profile against Postgres, which is
+the shape a deployment has rather than the shape a laptop has. See
+[`docs/ci-cd.md`](docs/ci-cd.md) for the configuration, and for the Jenkins pipeline that builds
+and tests all of it.
+
+**Or run the three processes directly**, which is the better loop for development. Start them in
+any order — each degrades gracefully while the others are down.
+
+The mobile app is optional either way, and needs only the backend — see [`mobile/`](mobile/).
 
 ### 1. AI service (port 8000)
 
@@ -40,19 +55,45 @@ others are down. The mobile app is optional and needs only the backend; see [`mo
 cd ai-service
 python -m venv .venv
 .venv/Scripts/python -m pip install -r requirements.txt   # macOS/Linux: .venv/bin/python
+
+# Optional: the layout→graph pipeline behind Layout Studio (OpenCV/NumPy/scikit-image).
+# Everything else runs without it; only /layout/* is unavailable when it is missing.
+.venv/Scripts/python -m pip install -r requirements-layout.txt
+
 .venv/Scripts/python -m uvicorn app.main:app --port 8000
 ```
 
 No configuration, no API token and no model download. See [Which model answers](#which-model-answers).
+
+`GET /health` reports `layout.available`, so the UI can say "AI tracing is unavailable"
+rather than letting an operator upload a plan and get a 404. The pipeline runs CV-only by
+default; set `LAYOUT_VLM_ENABLED=true` (see `.env.layout.example`) to add the Qwen2.5-VL
+semantic stage, which needs the extra GPU dependencies listed in `requirements-layout.txt`.
 
 ### 2. Backend (port 8080)
 
 ```bash
 cd backend
 ./mvnw spring-boot:run
+
+if ran in regular cmd:
+mvnw spring-boot:run
+
 ```
 
-Needs JDK 21.
+Needs JDK 21 or newer. **No database to install.** Accounts are written to an H2 file under
+`backend/data/`, created on first boot, with Flyway owning the schema. A deployment swaps in
+Postgres via `SPRING_PROFILES_ACTIVE=cloud` and no code change.
+
+Optional, and only if you want the extras:
+
+```bash
+cp secrets.example.yml secrets.yml   # then fill in
+```
+
+That seeds an allowlisted admin account and lets password-reset codes go out by email. Without
+it the app still boots — the admin is simply not seeded, and reset codes come back in the HTTP
+response instead of an inbox. Details in [`docs/auth-and-database.md`](docs/auth-and-database.md).
 
 ### 3. Frontend (port 5173)
 
@@ -62,8 +103,14 @@ npm install
 npm run dev
 ```
 
-Then open <http://localhost:5173>, go to **Access → Client**, sign in with anything, and press
-**Create session**. The sample arena is pre-loaded, so it is one click to a running crowd.
+Then open <http://localhost:5173>, go to **Access → Client**, and register an account — 8 to 72
+characters with at least one letter and one number. Press **Create session**: the sample arena is
+pre-loaded, so it is one click from there to a running crowd.
+
+Accounts are real. Registration writes a row, sign-in returns a JWT the frontend keeps in
+`localStorage`, and `POST /sessions` refuses anything without a `CLIENT` or `ADMIN` token.
+Walker and client are self-service; the admin console is allowlisted and cannot be requested at
+the form. See [`docs/auth-and-database.md`](docs/auth-and-database.md).
 
 ---
 
@@ -229,11 +276,18 @@ Re-score an existing checkpoint without retraining:
 
 All three read the same live session; they differ in what they are allowed to see.
 
-- **Walker** (attendee) — the venue map, live zone congestion, and a real walking route to the
-  nearest exit computed over the venue's own edges. Position is **zone-level**: on the web it is
-  self-declared by tapping a zone, and in the mobile app it can come from GPS if the attendee
-  opts in. Either way what the venue holds is a zone id, never a coordinate. Other attendees are
-  never shown.
+- **Walker** (attendee) — checks in with the **venue code** from the entrance signage, then gets
+  the venue map with a route out that is coloured by live congestion: blue clear, amber moderate,
+  orange heavy, red severe. The route is planned **around** the crowd rather than through it
+  (`src/crowdRouting.js`), and the banner says when it has diverted and what that cost in metres.
+  Position is **zone-level**: self-declared by tapping a zone on the web, or from GPS in the
+  mobile app if the attendee opts in. Either way the venue is told a zone id, never a coordinate.
+  Other attendees are never shown.
+- **Client** (organiser) — sets the venue code attendees check in with, traces a floor plan into a
+  walkable graph on the **AI layout** tab, then session setup and start/pause/stop, the live map
+  with agent positions, per-zone occupancy, the AI advisory, and a **crowd-safety panel** ranking
+  the zones that are becoming dangerous with what to do about each.
+- **Admin** — every session on the backend, aggregate figures, and the alert feed.
 
 ### What the system does and does not know about a phone
 
@@ -259,19 +313,44 @@ exactly:
   sees; they are excluded from `peakDensity` and `criticalNodeTicks`, because the baseline twin
   has no real attendees and a comparison between a run with spectators and one without would
   prove nothing. See [`mobile/`](mobile/).
-- **Client** (organiser) — session setup and start/pause/stop, the live map with agent positions,
-  per-zone occupancy, the AI advisory, and the diversion overlay.
-- **Admin** — every session on the backend, aggregate figures, and the alert feed.
+
+
+Walker and client are **the same account**: signing in at either door works and moves the account
+to that role, because both are self-service and forcing a second email to switch would only
+produce two half-used accounts per person. **Admin is not self-service** — it cannot be requested
+at registration and cannot be reached by signing in at the admin door; both answer `403`. The
+grant comes from an allowlist applied at every registration and login, so adding an address
+promotes that account at its next sign-in and removing one demotes it. The committed default is
+**empty** — this is a public repo, and a real address in it would publish both who holds admin
+and their inbox. Set `auth.admin-emails` in `backend/secrets.yml`, or `AUTH_ADMIN_EMAILS` on a
+deployment, and pair it with `auth.admin-password` so the account can seed itself at boot.
+
+### Venue codes
+
+A venue code (`WEMBLEY-01`) is the venue's `id`. It is client-supplied on `POST /venues`, travels
+inline on `POST /sessions`, and comes back on every `SessionInfo` as `venueId` — so an attendee
+typing a code resolves to the running session through `GET /sessions` with no new endpoint. Codes
+are stable for the life of the venue, which is what makes them printable; a session id is
+regenerated per run and cannot go on a sign.
 
 ---
 
 ## Tests
 
 ```bash
-cd backend    && ./mvnw test                      # 22 tests
-cd ai-service && .venv/Scripts/python -m pytest tests -q   # 8 tests
+cd backend    && ./mvnw test                               # 59 tests (37 auth, accounts, admin seeding)
+
+# pytest is not in requirements.txt — the runtime does not need it, so install it to test:
+cd ai-service && .venv/Scripts/python -m pip install pytest
+cd ai-service && .venv/Scripts/python -m pytest tests -q   # 47 tests (21 layout pipeline)
 cd ai-service && .venv/Scripts/python -m app.scoring       # model self-check
+cd frontend   && npm test          # 23 — routing, hazards, venue codes, password rules
+cd frontend   && npm run test:render   # every route + live component renders without throwing
 ```
+
+`frontend/src/__fixtures__/tracedVenue.json` is a graph the layout pipeline really produced from a
+floor-plan PNG — 36 junction nodes and dead ends, not a tidy authored venue — so the router is
+tested against the awkward shape it has to handle in practice.
 
 ---
 

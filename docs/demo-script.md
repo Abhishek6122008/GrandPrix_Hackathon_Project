@@ -1,78 +1,114 @@
 # Demo Script — 2 minutes
 
-> Placeholder outline. Fill in the exact numbers on Day 4 once a real run is recorded, and
-> rehearse against the clock — the whole thing has to land inside two minutes.
+Rehearse against the clock. The whole thing has to land inside two minutes, and the summary
+screen at the end is the part that wins it — leave time for it.
 
-**Before you start:** backend running, frontend running, `sample-data/venue-layout-sample.json`
-on the desktop, `hf.mock-enabled` set correctly for whichever models are actually live.
+**Before you start**
+
+- All three processes up: AI service (8000), backend (8080), frontend (5173). See the
+  [README](../README.md).
+- A client account already registered and **already signed in**. Do not spend demo time typing a
+  password into a form.
+- A session already created but **not started**, sample arena loaded.
+- Second tab open on `/access` → Walker, with the venue code ready to type.
+- Check `GET http://localhost:8000/health` — it names which model path will answer, so you know
+  in advance whether to say "our trained GNN" or "the offline model".
 
 ---
 
 ## 0:00 — 0:15 · The problem
 
-> "Gates, food counters, exits. People bunch up, and nobody sees it coming until it's a
-> crush. Here's a venue about to have that problem."
+> "Gates, food counters, exits. People bunch up, nobody sees it coming, and by the time it's
+> visible it's a crush. Here's a venue about to have that problem."
 
-Setup screen already open, venue layout loaded.
+Landing page, then straight into the client portal. Don't narrate the sign-in.
 
-## 0:15 — 0:35 · Setup
+## 0:15 — 0:35 · What the organiser sees
 
-- Show the venue graph — gates, walkways, concessions, exits.
-- Set crowd size to **_[TBD — pick the number that peaks convincingly]_**, rerouting on.
-- Hit **Run**.
+- Live map with the venue graph — gates, walkways, concessions, exits.
+- Press **Create session**, then start it.
 
-> "Four thousand people arriving over ten minutes. Simulated tick by tick."
+> "Every zone has a real capacity. Four thousand people arrive over ten minutes, and we simulate
+> them individually — this is a social force model, so people slow down and swerve around each
+> other rather than passing through."
 
-## 0:35 — 1:00 · Live fill
+## 0:35 — 1:00 · It fills, and it starts to hurt
 
-- Map fills. Node circles grow, colours shift green → amber.
-- Point at the gate that's climbing before it goes red.
+- Zone circles grow, colours shift green → amber.
+- Point at a gate that is climbing **before** it goes red.
 
-> "This isn't a replay — it's running now. Every node has a capacity, and the crowd moves
-> across the graph respecting it."
+> "This isn't a replay. It's running now, ten ticks a second, and that gate is about to go over."
 
-## 1:00 — 1:20 · Alert fires
+## 1:00 — 1:20 · The AI layer answers
 
-- Alerts panel slides in a **CRITICAL** card.
-- Read the advisory line out loud — that's the HF text model.
+- The **crowd-safety panel** ranks the zones becoming dangerous, with what to do about each.
+- Read the advisory sentence out loud.
 
-> "It didn't just say 91%. It said what to do about it."
+> "That sentence came from a model, and it's the reason we guard it — a small model will happily
+> tell a marshal to send people to a zone that doesn't exist. Anything naming a zone that wasn't
+> in the prompt gets rejected and we fall back to a template. Fluent and wrong is worse than
+> plain and right when someone's about to act on it."
 
-## 1:20 — 1:40 · Reroute
+## 1:20 — 1:40 · The attendee's view
 
-- Click the alert. Dashed path animates on the map.
-- Say where it routes to and why.
+- Switch to the walker tab. Type the **venue code** from the entrance signage, **Check in**.
 
-> "Dijkstra to the nearest zone with headroom. Shortest walk, not just any exit."
+> "Same live data, completely different view. The route out is coloured by live congestion, and
+> it's planned *around* the crowd, not through it. It tells you it diverted you and what that
+> cost you in metres."
 
-## 1:40 — 2:00 · Summary — the proof
+Say the honest bit — it lands better than glossing it:
 
-- Jump to the summary screen. Two columns, side by side.
+> "Position is zone-level and self-declared. We simulate a crowd; we don't track anyone's phone,
+> and the UI says so rather than drawing a fake accuracy circle."
 
-> "Same venue, same crowd, same arrivals — one run with our rerouting, one without.
-> Peak density **_[X]%_** down to **_[Y]%_**. **_[N]_** congested zones down to **_[M]_**."
+## 1:40 — 2:00 · The proof
 
-> "That's the whole point: we didn't just visualise the problem, we measurably reduced it."
+- Jump to the summary. Two runs, side by side.
+
+> "Same venue, same crowd, same arrivals, same random seed — one run with our rerouting, one
+> without. The second one ran hidden the whole time. **51 zone-ticks above critical, down to
+> zero.** Peak 100% down to 85%."
+
+> "That's the point. We didn't visualise the problem, we measurably removed it — and the
+> comparison is real simulation output, not an estimate."
 
 ---
 
-## If asked: where's the AI?
+## If asked: where's the AI, really?
 
-Two Hugging Face models, both doing something a rule couldn't:
+Two models, and they were adopted in opposite directions on purpose:
 
-1. **Congestion-propagation GNN** — predicts risk at *neighbouring* zones. A threshold sees
-   one node; message passing sees the walkway about to be overwhelmed by the gate feeding it.
-2. **Advisory generator** — density vectors into an instruction an operator can act on
-   without interpreting a chart.
+1. **Risk prediction — trained, not found.** Nothing on the Hub predicts congestion from a venue
+   graph; searching returns molecule GNNs and image-based crowd *counting*. None share an input
+   space with a venue graph, so we trained [`abhi1005/congestion-gnn`](https://huggingface.co/abhi1005/congestion-gnn)
+   and published it.
+2. **Advisory text — found, not trained.** Turning four facts into one clear sentence is exactly
+   what small instruct models already do, so Qwen2.5-0.5B-Instruct is used as-is.
 
-The simulation and the shortest path are deliberately *not* AI. They're deterministic
-problems with exact algorithms; forcing a model in would be slower and worse.
+The simulation and the shortest path are deliberately **not** AI. Deterministic problems with
+exact algorithms; forcing a model in would be slower and worse.
+
+## If asked: how good is the GNN, honestly?
+
+Quote the onset number, not the headline one:
+
+> "87% of bottlenecks caught before they form, at 95% precision. The naive 'assume every zone
+> stays as it is' baseline scores 0% on that by construction — it only looks good on the metric
+> that measures reporting rather than prediction."
+
+## If asked: is any of this persisted?
+
+> "Accounts are — Flyway-managed schema, H2 locally, Postgres in the cloud profile, no code
+> change between them. Simulation runs are in memory and die with the process. That's a known
+> limit, and it's a `SessionManager` change, not a config switch."
 
 ## If the demo breaks
 
-- HF endpoint down → mock fallbacks are already on, nothing visibly changes.
-- Backend down → the frontend still renders on mock data; say so, keep moving.
-- **_[TBD: record a 30-second screen capture on Day 4 as the last-resort fallback.]_**
+- **AI service down** → nothing visibly changes. The session keeps ticking on measured density
+  and the fallbacks answer. Say "that's the degradation path" and keep going.
+- **Backend down** → the frontend still renders. Say so, move to the summary screenshot.
+- **Last resort** → the recorded screen capture. Have it on the desktop, not in a cloud folder.
 
 ## If asked: does it track people's phones?
 

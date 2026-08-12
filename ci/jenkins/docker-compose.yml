@@ -1,0 +1,46 @@
+# Jenkins itself, containerised.
+#
+#   cd ci/jenkins && docker compose up -d --build
+#   -> http://localhost:8081
+#
+# Separate from the app's compose file on purpose: CI has a different lifecycle from the stack
+# it builds. You want Jenkins to stay up while you tear the app down and bring it back, and
+# `docker compose down` on the project should never take the build server with it.
+name: crowdflow-ci
+
+services:
+  jenkins:
+    build: .
+    # 8081 because the backend owns 8080. 50000 is the agent port — unused while everything
+    # runs on the built-in node, but publishing it now means adding an agent later is config
+    # rather than a recreate.
+    ports:
+      - "8081:8080"
+      - "50000:50000"
+    volumes:
+      - jenkins_home:/var/jenkins_home
+      # The host's daemon. This is what lets a job build images and run containers.
+      - /var/run/docker.sock:/var/run/docker.sock
+    # Root so the mounted socket is writable.
+    #
+    # The socket is owned by root:docker on the host, and the jenkins user's uid does not map
+    # to that group inside the container. The alternative — matching the host's docker gid at
+    # build time — breaks whenever the image is rebuilt on a different machine, which for a
+    # laptop CI buys fragility rather than safety. Access to the socket is already root-
+    # equivalent, so the meaningful control is the login wall, not this uid.
+    user: root
+    environment:
+      # Jenkins' own JVM. Nothing to do with the builds, which run in their own containers.
+      JAVA_OPTS: -Djava.awt.headless=true -Dhudson.model.DownloadService.noSignatureCheck=true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/login >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      start_period: 90s
+      retries: 6
+
+volumes:
+  # Named volume, not a bind mount: jenkins_home is full of unix-permission-sensitive files and
+  # a Windows bind mount mangles them.
+  jenkins_home:

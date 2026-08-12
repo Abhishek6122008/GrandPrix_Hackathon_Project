@@ -12,6 +12,7 @@ import com.crowdflow.service.detection.DensityDetector;
 import com.crowdflow.service.session.SessionManager;
 import java.util.List;
 import java.util.Map;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -20,6 +21,7 @@ import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.test.context.TestPropertySource;
 
 /**
@@ -42,11 +44,43 @@ class WalkerIngestTest {
     @Autowired
     private TestRestTemplate rest;
 
+    private static String bearer;
+
+    /**
+     * Signs in as a CLIENT, because creating a session is an organiser action.
+     *
+     * Reporting a position is not — see {@link #anAttendeeNeedsNoAccountToReportTheirZone()}.
+     * The token is attached to every request here so the *setup* works; that test strips it
+     * back off to prove the attendee path does not need one.
+     */
+    @BeforeEach
+    void authenticate() {
+        if (bearer == null) {
+            var body = Map.of(
+                    "email", "walker-ingest-test@crowdflow.local",
+                    "password", "test-password-123",
+                    "role", "client");
+            ResponseEntity<Map> res = rest.postForEntity("/auth/register", body, Map.class);
+            if (res.getStatusCode() != HttpStatus.CREATED) {
+                res = rest.postForEntity("/auth/login",
+                        Map.of("email", body.get("email"), "password", body.get("password")), Map.class);
+            }
+            bearer = (String) res.getBody().get("token");
+        }
+        rest.getRestTemplate().setInterceptors(List.of((request, bytes, execution) -> {
+            request.getHeaders().setBearerAuth(bearer);
+            return execution.execute(request, bytes);
+        }));
+    }
+
     @Autowired
     private SessionManager sessions;
 
     @Autowired
     private DensityDetector detector;
+
+    @LocalServerPort
+    private int port;
 
     private static final Venue VENUE = new Venue("venue-walker-test", "Walker Test Venue",
             List.of(
@@ -116,6 +150,38 @@ class WalkerIngestTest {
 
         assertThat(session.walkerCount()).isEqualTo(1);
         assertThat(session.getPeople()).noneMatch(person -> person.getId().equals("w-1"));
+    }
+
+    /**
+     * An attendee reports a zone with no account and no token, and the venue counts them.
+     *
+     * This is a security decision, not an oversight, so it is asserted rather than assumed.
+     * Writes to /sessions/** otherwise require CLIENT or ADMIN; the mobile app has no account
+     * by design and a web attendee signs in as WALKER, so both would be refused. Requiring an
+     * organiser login to say where you are standing would also destroy the privacy claim the
+     * feature rests on. What bounds it instead is session.max-walkers and the TTL.
+     *
+     * <p>The rule is scoped to the exact patterns {@code PUT|DELETE /sessions/*&#47;walkers/*},
+     * so it cannot widen to session creation or start/stop. The negative half of that is not
+     * asserted here: a 401 against this JDK HTTP client raises HttpRetryException rather than
+     * returning the status — the quirk SecurityConfig's own comment describes — so the
+     * assertion could not be written honestly.
+     */
+    @Test
+    void anAttendeeNeedsNoAccountToReportTheirZone() {
+        String id = createSession();
+
+        // A second template with no interceptor: no Authorization header at all.
+        TestRestTemplate anonymous = new TestRestTemplate();
+        String url = "http://localhost:" + port + "/sessions/" + id + "/walkers/w-anon";
+
+        ResponseEntity<WalkerPlacement> placed = anonymous.exchange(url, HttpMethod.PUT,
+                new HttpEntity<>(Map.of("nodeId", "gate")), WalkerPlacement.class);
+        assertThat(placed.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(sessions.get(id).liveOccupancy().get("gate")).isEqualTo(1);
+
+        assertThat(anonymous.exchange(url, HttpMethod.DELETE, null, Void.class).getStatusCode())
+                .isEqualTo(HttpStatus.NO_CONTENT);
     }
 
     // ------------------------------------------------------------------ placement

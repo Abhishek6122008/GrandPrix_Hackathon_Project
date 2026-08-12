@@ -6,6 +6,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -24,6 +25,16 @@ import org.springframework.test.web.servlet.MockMvc;
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @AutoConfigureMockMvc
+/**
+ * Runs as an authorised CLIENT.
+ *
+ * These cases predate authentication and are about simulation behaviour, not access control,
+ * so they assert against an authenticated caller rather than re-testing the security rules in
+ * every method. The rules themselves are covered by AuthApiTest. Using @WithMockUser rather
+ * than disabling security keeps the filter chain in the path, so a change that breaks
+ * authorisation still shows up here as a 403.
+ */
+@WithMockUser(roles = "CLIENT")
 class SimulationApiTest {
 
     @Autowired

@@ -1,0 +1,9 @@
+# Baked into the image so a rebuilt Jenkins comes back with the same plugins rather than
+# whatever someone clicked last time.
+workflow-aggregator
+pipeline-stage-view
+git
+junit
+docker-workflow
+timestamper
+ws-cleanup

@@ -18,6 +18,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -48,6 +49,12 @@ public class SimulationEngine {
     private final double ticksPerEdge;
     private final double neighbourRadius;
     private final double corridorScale;
+
+    /**
+     * Decides where each attendee goes and how long they stay. Constructed here rather than
+     * injected because it holds only the tick length and no collaborators.
+     */
+    private final ItineraryPlanner itineraryPlanner = new ItineraryPlanner(1.0);
 
     /** Walking speed in layout units per tick, per venue. See {@link #agentSpeedFor}. */
     private final Map<String, Double> speedCache = new ConcurrentHashMap<>();
@@ -321,6 +328,9 @@ public class SimulationEngine {
     public void step(Session session) {
         Venue venue = session.getVenue();
         spawnArrivals(session, venue);
+        // Before integrating: anyone the event has just released should start walking on this
+        // tick, not the next one, or the surge lags the phase change by a frame.
+        releaseForEgress(session, venue);
         integrate(session, venue);
         resolveArrivals(session, venue);
         session.setTick(session.getTick() + 1);
@@ -332,7 +342,12 @@ public class SimulationEngine {
      * — people wait outside rather than being crushed inside, which is the whole point.
      */
     private void spawnArrivals(Session session, Venue venue) {
-        int wanted = Math.min(session.getArrivalRate(), session.remainingToSpawn());
+        // Shaped by the arrival curve rather than flat. See ArrivalCurve: a constant rate
+        // never produces the pre-event push or the post-event surge, which are the only two
+        // moments a crowd plan is really written for.
+        double multiplier = ArrivalCurve.arrivalMultiplier(session.getTick(), session.getMaxTicks());
+        int shaped = (int) Math.round(session.getArrivalRate() * multiplier);
+        int wanted = Math.min(shaped, session.remainingToSpawn());
         if (wanted <= 0) {
             return;
         }
@@ -358,16 +373,15 @@ public class SimulationEngine {
                 continue;
             }
 
-            ReroutePath toExit = routeEngine.nearestExit(venue, gate.id());
             List<Person> arrivals = agentFactory.createAgents(share, gate, session.getId(),
                     session.getSpawned() + spawnedThisTick, agentSpeedFor(venue),
                     nodeRadius(gate) * 0.8, random);
             for (Person person : arrivals) {
-                if (toExit.toNodeId() != null) {
-                    person.setRoute(toExit.path().subList(1, toExit.path().size()));
-                }
-                // No exit reachable from this gate: the person still enters and mills about,
-                // which is exactly the "venue with no exit" case the detector should scream at.
+                // Each arrival gets somewhere to be, not just a way out. The engine walks the
+                // itinerary one stop at a time in advanceItineraries() — routing per leg, so a
+                // stop that turns out to be unreachable is skipped instead of stranding them.
+                person.setItinerary(itineraryPlanner.plan(venue, random));
+                routeToNextStop(session, venue, person);
             }
             session.getPeople().addAll(arrivals);
             spawnedThisTick += arrivals.size();
@@ -471,16 +485,92 @@ public class SimulationEngine {
                 person.setArrived(true);
                 people.remove(i);
                 exited++;
-            } else if (person.nextWaypoint() == null && here != null && !here.isExit()) {
-                // Route spent without reaching an exit — usually because a reroute stranded
-                // them. Re-plan rather than leave them standing forever.
-                ReroutePath replan = routeEngine.nearestExit(venue, person.getCurrentNodeId());
-                if (replan.toNodeId() != null) {
-                    person.setRoute(replan.path().subList(1, replan.path().size()));
+                continue;
+            }
+
+            // Still walking — nothing to decide until they get where they were going.
+            if (person.nextWaypoint() != null) {
+                continue;
+            }
+
+            // Arrived at a stop. Linger, then move on to the next one.
+            if (person.isDwelling()) {
+                boolean finished = person.tickDwell();
+                if (!finished) {
+                    continue;
+                }
+            } else if (here != null && !person.getItinerary().isEmpty()) {
+                // Just got here and has somewhere else to be later: stay a while first.
+                Random dwellRandom = new Random(person.getId().hashCode() * 31L + session.getTick());
+                person.startDwell(itineraryPlanner.dwellTicks(here, dwellRandom));
+                if (person.isDwelling()) {
+                    continue;
                 }
             }
+
+            routeToNextStop(session, venue, person);
         }
         session.recordExited(exited);
+    }
+
+    /**
+     * Sends a person to the next place on their itinerary, or to an exit when it is spent.
+     *
+     * <p>Routing happens per leg rather than once up front. A single path through every stop
+     * would be planned against the venue as it was at spawn time, and by the time somebody has
+     * sat through an event the congestion it was planned around is an hour stale. Re-routing at
+     * each stop also means the reroute engine gets a say every time, which is what lets a
+     * diversion actually apply to someone mid-visit.
+     */
+    private void routeToNextStop(Session session, Venue venue, Person person) {
+        String from = person.getCurrentNodeId();
+
+        String stop;
+        while ((stop = person.popNextStop()) != null) {
+            if (stop.equals(from)) {
+                continue; // already here
+            }
+            ReroutePath leg = routeEngine.pathAvoiding(venue, from, stop, Set.of());
+            if (leg != null && leg.toNodeId() != null && leg.path().size() > 1) {
+                person.setRoute(leg.path().subList(1, leg.path().size()));
+                return;
+            }
+            // Unreachable from here — drop it and try the next stop rather than stranding
+            // them. A plan is a preference, not a guarantee the graph can honour it.
+        }
+
+        // Itinerary exhausted: head for the way out.
+        person.setLeaving(true);
+        ReroutePath toExit = routeEngine.nearestExit(venue, from);
+        if (toExit.toNodeId() != null && toExit.path().size() > 1) {
+            person.setRoute(toExit.path().subList(1, toExit.path().size()));
+        }
+    }
+
+    /**
+     * When the event ends, people get up and leave.
+     *
+     * <p>Without this the venue drains at whatever pace the dwell times happen to expire, and
+     * the end-of-event surge — the single most dangerous moment at any venue, and the thing
+     * this tool exists to predict — never happens. A fraction of the seated crowd stands up
+     * each tick once the event is over, rising as the surge proceeds.
+     */
+    private void releaseForEgress(Session session, Venue venue) {
+        double fraction = ArrivalCurve.departureFraction(session.getTick(), session.getMaxTicks());
+        if (fraction <= 0) {
+            return;
+        }
+        Random random = new Random(session.getSeed() * 7919L + session.getTick());
+        for (Person person : session.getPeople()) {
+            if (person.isLeaving() || !person.isDwelling()) {
+                continue;
+            }
+            if (random.nextDouble() < fraction) {
+                person.startDwell(0);
+                person.getItinerary().clear();
+                routeToNextStop(session, venue, person);
+            }
+        }
     }
 
     /** Where an agent is walking to: its next waypoint, or its own node once the route is spent. */

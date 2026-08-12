@@ -25,11 +25,35 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Where the bearer token lives.
+ *
+ * localStorage rather than memory so a refresh does not sign you out, and rather than a
+ * cookie because the API is stateless and CSRF-free precisely by *not* using cookies — a
+ * token the browser attaches automatically is the thing CSRF attacks rely on.
+ */
+const TOKEN_KEY = 'cf.auth.token';
+
+export const auth = {
+  get token() {
+    try { return localStorage.getItem(TOKEN_KEY); } catch { return null; }
+  },
+  set(token) {
+    try { token ? localStorage.setItem(TOKEN_KEY, token) : localStorage.removeItem(TOKEN_KEY); } catch { /* private mode */ }
+  },
+  clear() { this.set(null); },
+};
+
 async function request(path, options = {}) {
   let response;
+  const token = auth.token;
   try {
     response = await fetch(`${BASE}${path}`, {
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(options.headers ?? {}),
+      },
       ...options,
     });
   } catch (cause) {
@@ -39,6 +63,10 @@ async function request(path, options = {}) {
   }
 
   if (!response.ok) {
+    // A rejected token is worse than none: it will fail every subsequent call the same way,
+    // so clear it and let the app fall back to signed-out rather than looping on 401s.
+    if (response.status === 401) auth.clear();
+
     // Spring's error bodies carry a `message`; fall back to the status line when they do not.
     const body = await response.json().catch(() => null);
     throw new ApiError(
@@ -54,8 +82,80 @@ async function request(path, options = {}) {
 const post = (path, body) =>
   request(path, { method: 'POST', body: body === undefined ? undefined : JSON.stringify(body) });
 
+const patch = (path, body) =>
+  request(path, { method: 'PATCH', body: JSON.stringify(body) });
+
 export const api = {
   baseUrl: BASE,
+
+  // --- auth ----------------------------------------------------------------
+  // register/login return { token, user }; the token is stored here so callers never have to
+  // remember to do it, and every later request picks it up automatically.
+  auth: {
+    /** `role` is honoured for walker and client; asking for admin is refused with a 403. */
+    async register({ email, password, role }) {
+      const res = await post('/auth/register', { email, password, role });
+      auth.set(res.token);
+      return res;
+    },
+    /**
+     * `portal` is which of the three doors was used.
+     *
+     * Walker and client are interchangeable — signing in at either moves the account there —
+     * so one set of credentials opens both. The admin door is not: an account that is not
+     * already an admin is refused with a 403 rather than being quietly let in as a client,
+     * because silently landing somewhere other than where you clicked is worse than a refusal.
+     */
+    async login({ email, password, portal }) {
+      const res = await post('/auth/login', { email, password, portal });
+      auth.set(res.token);
+      return res;
+    },
+
+    /**
+     * Ask for a reset code. Always resolves, even for an address with no account — the
+     * backend answers identically either way so this endpoint cannot be used to find out
+     * which emails are registered.
+     *
+     * Resolves to `{ message, code, expiresInSeconds }`. `code` is present only when the
+     * backend has `auth.reset.expose-code` on, which is the local default because there is no
+     * mail server to send it through; in a deployment it is null and the code arrives by mail.
+     */
+    forgotPassword: ({ email }) => post('/auth/forgot-password', { email }),
+
+    /** Redeem the code for a new password. Signs in on success, like register/login do. */
+    async resetPassword({ email, code, password }) {
+      const res = await post('/auth/reset-password', { email, code, password });
+      auth.set(res.token);
+      return res;
+    },
+    /** Resolves the stored token to an account, or null when there is not a usable one. */
+    async me() {
+      if (!auth.token) return null;
+      try {
+        return await request('/auth/me');
+      } catch {
+        return null;   // request() has already cleared a 401 token
+      }
+    },
+    /**
+     * Edit your own profile. Returns the saved account, so the caller can replace its copy
+     * with what the server actually stored rather than with what it hoped it sent.
+     *
+     * PATCH, not PUT: only the keys present are written, so saving a name does not require
+     * sending the avatar back alongside it. Pass an empty string to clear a field — omitting
+     * it leaves the stored value alone, which is the only way to distinguish "unchanged" from
+     * "remove this".
+     */
+    updateProfile: ({ displayName, bio, avatar }) => patch('/auth/profile', {
+      ...(displayName === undefined ? {} : { displayName }),
+      ...(bio === undefined ? {} : { bio }),
+      ...(avatar === undefined ? {} : { avatar }),
+    }),
+
+    signOut() { auth.clear(); },
+    isSignedIn: () => Boolean(auth.token),
+  },
 
   // --- sessions: the live agent simulation --------------------------------
   /** venue JSON + crowd settings -> SessionInfo. The venue travels inline. */
@@ -88,6 +188,13 @@ export const api = {
   // --- venues -------------------------------------------------------------
   createVenue: (venue) => post('/venues', venue),
   getVenue: (id) => request(`/venues/${id}`),
+  /**
+   * Every venue the backend has stored, across restarts.
+   *
+   * How a venue code resolves when nothing is running on it. Sessions are transient;
+   * a code printed on a wall is not, so the walker portal looks here before giving up.
+   */
+  listVenues: () => request('/venues'),
   /** Walking path from a zone to the nearest exit, over the venue's own edges. */
   getVenueRoute: (id, fromNodeId) =>
     request(`/venues/${id}/route?from=${encodeURIComponent(fromNodeId)}`),
