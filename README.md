@@ -24,6 +24,7 @@ an estimate.
 | [`frontend/`](frontend/) | React + Vite. Three portals over one live map. Port **5173**. |
 | [`ml/`](ml/) | Model training and export to the Hugging Face Hub. Not needed to run the app. |
 | [`sample-data/`](sample-data/) | A ready-made venue layout and event schedule. |
+| [`mobile/`](mobile/) | Flutter attendee app. Live zone congestion, route to the nearest exit, optional GPS. |
 | [`ci/`](ci/) | Jenkins, itself in a container. Not needed to run the app. |
 | [`docs/`](docs/) | API contract, system design, auth and database, CI/CD, demo script. |
 
@@ -45,6 +46,8 @@ and tests all of it.
 
 **Or run the three processes directly**, which is the better loop for development. Start them in
 any order — each degrades gracefully while the others are down.
+
+The mobile app is optional either way, and needs only the backend — see [`mobile/`](mobile/).
 
 ### 1. AI service (port 8000)
 
@@ -277,14 +280,40 @@ All three read the same live session; they differ in what they are allowed to se
   the venue map with a route out that is coloured by live congestion: blue clear, amber moderate,
   orange heavy, red severe. The route is planned **around** the crowd rather than through it
   (`src/crowdRouting.js`), and the banner says when it has diverted and what that cost in metres.
-  Position is **zone-level and self-declared**: the system simulates a crowd, it does not track
-  anyone's phone, and the UI says so instead of drawing a false accuracy circle. Other attendees
-  are never shown.
+  Position is **zone-level**: self-declared by tapping a zone on the web, or from GPS in the
+  mobile app if the attendee opts in. Either way the venue is told a zone id, never a coordinate.
+  Other attendees are never shown.
 - **Client** (organiser) — sets the venue code attendees check in with, traces a floor plan into a
   walkable graph on the **AI layout** tab, then session setup and start/pause/stop, the live map
   with agent positions, per-zone occupancy, the AI advisory, and a **crowd-safety panel** ranking
   the zones that are becoming dangerous with what to do about each.
 - **Admin** — every session on the backend, aggregate figures, and the alert feed.
+
+### What the system does and does not know about a phone
+
+The simulated crowd is simulated. Those thousands of agents are not people and never were, and
+nothing about them comes from a device.
+
+The mobile app changes that for the attendees who choose it, so the limits are worth stating
+exactly:
+
+- **A zone, not a position.** A GPS fix is resolved to a zone at the ingest boundary and the
+  latitude and longitude are discarded. `Session` holds a zone id and an expiry per attendee and
+  has no field to put coordinates in. The fix is echoed back to the phone that sent it, so it can
+  draw its own dot, and to nobody else.
+- **A fix that cannot support a claim is thrown away.** If the reported accuracy circle is bigger
+  than the zone it lands in, the app says so and places nobody. It never draws a position it does
+  not have.
+- **Foreground only.** No background location permission is requested and none would work. A
+  phone in a pocket says nothing useful about where its owner is going, and an attendee who
+  closes the app ages out of the venue within 30 seconds.
+- **Session-scoped and anonymous.** The id is a UUID the app generates and keeps to itself. There
+  is no account, no login, and nothing to join it to.
+- **It never touches the before/after numbers.** Real attendees raise the density an operator
+  sees; they are excluded from `peakDensity` and `criticalNodeTicks`, because the baseline twin
+  has no real attendees and a comparison between a run with spectators and one without would
+  prove nothing. See [`mobile/`](mobile/).
+
 
 Walker and client are **the same account**: signing in at either door works and moves the account
 to that role, because both are self-service and forcing a second email to switch would only

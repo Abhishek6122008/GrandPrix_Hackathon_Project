@@ -136,9 +136,22 @@ public class DensityDetector {
     // Session-facing half — same thresholds, driven off Session's density history.
     // ================================================================================
 
-    /** Current density per node for a session, from where its agents actually are. */
+    /**
+     * Density per node from the simulated agents alone.
+     *
+     * <p>This is the one the before/after comparison is defined on — see
+     * {@code Session.occupancy()}. Everything an operator looks at uses {@link #liveDensitiesOf}.
+     */
     public Map<String, Double> densitiesOf(Session session) {
-        Map<String, Integer> occupancy = session.occupancy();
+        return densitiesFrom(session, session.occupancy());
+    }
+
+    /** Density per node including real attendees reporting position from a phone. */
+    public Map<String, Double> liveDensitiesOf(Session session) {
+        return densitiesFrom(session, session.liveOccupancy());
+    }
+
+    private Map<String, Double> densitiesFrom(Session session, Map<String, Integer> occupancy) {
         Map<String, Double> densities = new LinkedHashMap<>();
         for (VenueNode node : session.getVenue().nodes()) {
             densities.put(node.id(), round((double) occupancy.getOrDefault(node.id(), 0) / node.capacity()));

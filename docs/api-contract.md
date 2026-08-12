@@ -181,6 +181,11 @@ are hidden.
 **200** — the same frame the WebSocket pushes, for clients that would rather poll. `null`
 before the first frame is published.
 
+`?people=false` returns the frame with `people` as `[]`. Agent positions are the bulk of a
+frame — up to `session.max-people-in-frame` entries at ~80 bytes each — and an attendee-facing
+client is never shown other people anyway, so for the mobile app they are tens of kilobytes of
+pure cost per poll. `sampledFrom` still reports the true crowd size.
+
 ---
 
 ## `GET /sessions/{id}/summary`
@@ -225,6 +230,11 @@ Organiser and viewers connect to the same path and receive identical frames. The
 frame is pushed on connect, so a late joiner never sees a blank map. Read-only: inbound
 messages are ignored and cannot perturb the simulation.
 
+That stays true now attendees can report position. They do it over
+`PUT /sessions/{id}/walkers/{walkerId}` precisely so this socket remains a pure fan-out — a
+viewer's browser cannot alter what any other viewer sees, and the phone does not have to hold a
+socket carrying 600 agent positions it is forbidden to draw.
+
 Handshakes are restricted to the same `cors.allowed-origins` list as the REST API. A
 WebSocket handshake is not covered by CORS, so leaving it open while the REST API is pinned
 would let any page on the internet stream from a locally running backend.
@@ -259,7 +269,8 @@ default 100 ms tick).
 
   "metrics": {
     "peopleInside": 1504, "spawned": 1507, "exited": 3, "pendingArrivals": 993,
-    "peakDensity": 0.91, "criticalNodeTicks": 250, "activeAlerts": 3, "viewers": 1
+    "peakDensity": 0.91, "criticalNodeTicks": 250, "activeAlerts": 3, "viewers": 1,
+    "realWalkers": 12
   }
 }
 ```
@@ -278,6 +289,90 @@ Notes a client needs:
 - **Set your client's max message size.** A busy frame is tens of kilobytes and the usual 8 KB
   default *closes the connection* rather than truncating. The server side is raised via
   `session.socket-buffer-bytes` (default 512 KB).
+- **`metrics.realWalkers` is people, `metrics.peopleInside` is agents.** The first counts real
+  attendees reporting position from a phone; the second counts simulated ones. A node's
+  `occupancy` and `density` include both. `peakDensity` and `criticalNodeTicks` include only the
+  simulated ones — see `PUT /sessions/{id}/walkers/{walkerId}` for why.
+
+---
+
+## `PUT /sessions/{id}/walkers/{walkerId}`
+
+Where a real attendee is. Sent by the mobile app; see [`mobile/`](../mobile/).
+
+`walkerId` is chosen by the client — a UUID the app generates once and keeps. There is no
+account behind it and nothing to join it to. `PUT` because re-reporting is an update to one
+attendee, not a second one, so a retried request is harmless.
+
+**Request** — exactly one of two forms:
+
+```json
+{ "lat": 12.9716, "lng": 77.5946, "accuracyMetres": 8.4 }
+```
+```json
+{ "nodeId": "gate-a" }
+```
+
+The first needs the venue to be georeferenced (`PUT /venues/{id}/georef`). The second is the
+self-declared zone the web Walker has always used, and is what the app falls back to when
+permission is denied or the venue has no anchors.
+
+**200**
+
+```json
+{
+  "walkerId": "w-3f2a9c11", "nodeId": "gate-a", "state": "IN_ZONE",
+  "x": 137.2, "y": 88.4, "accuracyVenueUnits": 12.6, "expiresInSeconds": 30
+}
+```
+
+`state` is one of:
+
+| state | meaning | counted |
+|---|---|---|
+| `IN_ZONE` | inside a zone's radius, with an accuracy good enough to believe it | yes |
+| `MANUAL` | self-declared by tapping a zone | yes |
+| `IN_TRANSIT` | between zones — walking a corridor | no |
+| `OUTSIDE_VENUE` | beyond the venue's bounding box | no |
+| `TOO_INACCURATE` | the uncertainty circle is bigger than the zone it lands in | no |
+
+- **404** unknown session, or a baseline twin — `{id}-baseline` refuses attendees for the same
+  reason it is hidden from `GET /sessions`.
+- **409** the venue has no georeference and the body was a GPS fix. The message names both fixes.
+- **400** a body that is neither form, or a `nodeId` the venue does not have.
+- **429** the session already holds `session.max-walkers` attendees (default 2000).
+
+Notes a client needs:
+
+- **Coordinates are not stored.** A fix is resolved to a zone at this boundary and the latitude
+  and longitude are discarded. The session holds a zone id and an expiry per attendee, and has
+  nowhere to put a coordinate. `x`/`y` come back to the sender so it can draw its own dot, and
+  go to nobody else.
+- **The three rejections mean different things** and are worth surfacing differently: move,
+  wait, or you are not at this venue. A rejected fix also *removes* the attendee — somebody the
+  system cannot locate is not counted anywhere.
+- **The accuracy gate is relative, not a metre threshold.** A fix whose uncertainty circle is
+  larger than the zone it claims does not support the claim, whatever the absolute figure. That
+  also means it works unchanged on a venue drawn at any scale. Note the consequence: a venue
+  whose zones are a couple of metres across can never be resolved by consumer GNSS, and every
+  fix will correctly come back `TOO_INACCURATE`.
+- **Attendees never reach the before/after numbers.** They raise `occupancy` and `density`, and
+  so drive alerts, reroutes and the AI advisory. They are excluded from `peakDensity` and
+  `criticalNodeTicks`, because the baseline twin has no attendees and cannot have — counting
+  them would put people on the optimised side of the comparison and nowhere on the other, and
+  the summary would report that rerouting had made the venue worse.
+- **Attendees are never in `people[]`.** Others see the count in `metrics.realWalkers`, never
+  the individual.
+- **`expiresInSeconds`** is `session.walker-ttl-ms` (default 30s). Send again before it lapses
+  or the attendee leaves the venue. The mobile app heartbeats every 20s even when stationary.
+- The endpoint is unauthenticated, like the rest of this API. `max-walkers` and the TTL bound
+  what that costs rather than pretending it cannot be abused.
+
+---
+
+## `DELETE /sessions/{id}/walkers/{walkerId}`
+
+**204** — leaves now rather than waiting for the TTL. Unknown walker ids are not an error.
 
 ---
 
@@ -469,3 +564,77 @@ how long people spent in a crush.
 
 When the run had `rerouteEnabled: false`, `baseline` and `optimised` are identical — there
 is no twin to compare against.
+
+---
+
+## `PUT /venues/{id}/georef`
+
+Ties a venue's layout coordinates to real-world latitude and longitude, so a GPS fix can be
+resolved to a zone. Without it a venue simply has no GPS and attendees self-declare, which is
+the ordinary case.
+
+**Request** — exactly three anchors. For each: the zone you are standing in, and the coordinates
+your phone reports there.
+
+```json
+{
+  "anchors": [
+    { "nodeId": "gate-a",    "lat": 12.97160, "lng": 77.59460 },
+    { "nodeId": "gate-b",    "lat": 12.97124, "lng": 77.59460 },
+    { "nodeId": "exit-east", "lat": 12.97160, "lng": 77.59535 }
+  ]
+}
+```
+
+**Three, not two.** Two anchors fit a rotation and its mirror image equally well and cannot
+distinguish them — and since venue `y` runs *downward* while north runs up, the correct answer
+is usually the reflected one. A two-anchor fit therefore produces a mirrored venue that matches
+both anchors perfectly and sends attendees to the gate diagonally opposite. The third anchor
+resolves handedness from the data.
+
+**200**
+
+```json
+{
+  "venueId": "venue-sample", "originLat": 12.97148, "originLng": 77.59485,
+  "a": 10.81, "b": 0.0, "c": 0.0, "d": 0.0, "e": -10.81, "f": 0.0,
+  "anchors": [ ... ], "shearDegrees": 0.4, "scaleRatio": 10.81, "setAtMillis": 1786000000000
+}
+```
+
+`x = a·east + b·north + c` and `y = d·east + e·north + f`, with east/north in metres from the
+origin. `shearDegrees` and `scaleRatio` are reported rather than enforced — a stylised layout
+genuinely has some shear, and the organiser is better placed than the server to judge how much
+is too much.
+
+**400**, each naming the measurement that failed:
+
+- anchors nearer than 20 m — two readings inside each other's error circle carry one reading's
+  worth of information
+- a triangle altitude under 15 m — a 10 m GPS error perpendicular to a long side rotates the fit
+  by roughly `10/h` radians, which at h = 15 m is already about 38°
+- three anchored zones collinear *on the map*, which collapses the venue onto a line
+- a fitted scale disagreeing with the venue's own by more than 3×. Edge `length` is documented in
+  metres while node `x`/`y` are not, so their ratio is an independent estimate of layout units
+  per metre. Disagreement almost always means an anchor was recorded in a different zone from
+  the one named.
+
+**404** unknown venue, or an anchor naming a node the venue does not have.
+
+**Anchor on gates and exits.** The venue-side point is the node's *centre*, so the accuracy of
+the whole feature is bounded by how close to a zone's centre you stood. Zone radius is derived
+from capacity, so a gate is a few metres across and a 900-seat stand is tens.
+
+---
+
+## `GET /venues/{id}/georef`
+
+**200** the georeference · **404** the venue has no anchors set. A client should treat the 404
+as "this venue has no GPS" and fall back to self-declared zones, not as an error.
+
+---
+
+## `DELETE /venues/{id}/georef`
+
+**204**. Unsetting is not an error even if none was set.
+

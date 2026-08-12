@@ -167,6 +167,21 @@ export const api = {
   stopSession: (id) => post(`/sessions/${id}/stop`),
   /** The same frame the WebSocket pushes — for a first paint before the socket opens. */
   getSessionState: (id) => request(`/sessions/${id}/state`),
+
+  /**
+   * Tells the venue which zone an attendee is standing in.
+   *
+   * The same endpoint the mobile app uses. The browser sends the self-declared form
+   * (`{ nodeId }`) because a laptop has no useful GPS — but it is the same walker, counted the
+   * same way, so an operator sees web attendees and phone attendees in one number.
+   *
+   * `walkerId` is opaque and generated on this device; there is no account behind it.
+   */
+  placeWalker: (sessionId, walkerId, fix) =>
+    request(`/sessions/${sessionId}/walkers/${encodeURIComponent(walkerId)}`,
+      { method: 'PUT', body: JSON.stringify(fix) }),
+  removeWalker: (sessionId, walkerId) =>
+    request(`/sessions/${sessionId}/walkers/${encodeURIComponent(walkerId)}`, { method: 'DELETE' }),
   /** Post-run stats including the baseline twin comparison. */
   getSessionSummary: (id) => request(`/sessions/${id}/summary`),
 
@@ -183,6 +198,19 @@ export const api = {
   /** Walking path from a zone to the nearest exit, over the venue's own edges. */
   getVenueRoute: (id, fromNodeId) =>
     request(`/venues/${id}/route?from=${encodeURIComponent(fromNodeId)}`),
+
+  /**
+   * Ties a venue's layout to real coordinates, so the mobile app can turn a GPS fix into a zone.
+   *
+   * Three anchors, because two cannot distinguish a rotation from its mirror image — and since
+   * venue y runs downward while north runs up, the mirrored fit is the one a two-point solve
+   * tends to pick. See docs/api-contract.md.
+   */
+  setGeoref: (id, anchors) =>
+    request(`/venues/${id}/georef`, { method: 'PUT', body: JSON.stringify({ anchors }) }),
+  /** 404 here means "this venue has no GPS", which is the ordinary case rather than an error. */
+  getGeoref: (id) => request(`/venues/${id}/georef`),
+  clearGeoref: (id) => request(`/venues/${id}/georef`, { method: 'DELETE' }),
 
   health: () => request('/health'),
 };

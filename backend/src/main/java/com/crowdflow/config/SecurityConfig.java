@@ -63,6 +63,21 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/venues/**", "/sessions/**", "/simulations/**", "/alerts/**").permitAll()
                 .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
 
+                // An attendee saying which zone they are standing in. Open, and it has to be:
+                // the mobile app has no account by design and the web attendee signs in as
+                // WALKER, so either would be refused by the /sessions/** write rule below.
+                // Requiring an organiser login to report your own position would also destroy
+                // the privacy claim the feature rests on — the whole point is that nothing here
+                // is linked to a person.
+                //
+                // What bounds it instead of authentication: session.max-walkers caps how many a
+                // session will hold, session.walker-ttl-ms ages anything injected out within
+                // half a minute, and a walker can only ever move a zone *count* — never the
+                // simulation, never another client's view, and never the before/after numbers.
+                // Stated in docs/api-contract.md rather than left implied.
+                .requestMatchers(HttpMethod.PUT, "/sessions/*/walkers/*").permitAll()
+                .requestMatchers(HttpMethod.DELETE, "/sessions/*/walkers/*").permitAll()
+
                 // --- writes -------------------------------------------------------------
                 // Creating and driving a run is an organiser action; admins can do it too.
                 .requestMatchers("/sessions/**", "/simulations/**").hasAnyRole("CLIENT", "ADMIN")
