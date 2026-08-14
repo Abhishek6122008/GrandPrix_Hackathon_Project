@@ -7,6 +7,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.crowdflow.config.AdminSeeder;
 import com.crowdflow.model.AppUser;
 import com.crowdflow.repository.UserRepository;
+import com.crowdflow.security.AdminAllowlist;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -85,7 +86,7 @@ class AdminSeedingTest {
                         .content("{\"email\":\"" + email + "\",\"password\":\"Chosen/456\"}"))
                 .andExpect(status().isCreated());
 
-        new AdminSeeder(users, encoder, email, "Seeded/123").run(null);
+        new AdminSeeder(users, encoder, new AdminAllowlist(email), "Seeded/123").run(null);
 
         assertThat(users.findByEmailIgnoreCase(email).orElseThrow().getRole())
                 .isEqualTo(AppUser.Role.ADMIN);
@@ -103,7 +104,7 @@ class AdminSeedingTest {
         // The console must not be the weakest account on the platform, and a policy the
         // console itself breaks is not a policy.
         String email = "weak-admin@crowdflow.local";
-        new AdminSeeder(users, encoder, email, "short").run(null);
+        new AdminSeeder(users, encoder, new AdminAllowlist(email), "short").run(null);
 
         assertThat(users.findByEmailIgnoreCase(email)).isEmpty();
     }
@@ -111,7 +112,7 @@ class AdminSeedingTest {
     @Test
     void noConfiguredPasswordCreatesNothingRatherThanGuessingOne() {
         String email = "unseeded-admin@crowdflow.local";
-        new AdminSeeder(users, encoder, email, "").run(null);
+        new AdminSeeder(users, encoder, new AdminAllowlist(email), "").run(null);
 
         assertThat(users.findByEmailIgnoreCase(email)).isEmpty();
     }

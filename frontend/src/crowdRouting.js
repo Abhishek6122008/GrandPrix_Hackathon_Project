@@ -134,10 +134,14 @@ function buildGraph(rawVenue, densityByNode) {
     const width = Math.max(edge.width ?? 4, 0.8);
     const weight = length / Math.min(width / 4, 1.6);
 
-    adjacency.get(from).push({ to, weight });
+    // `length` is carried alongside `weight` because they answer different questions and
+    // only coincide on a 4m-wide edge. `weight` is what the router compares; `length` is
+    // the ground the attendee actually covers, and it is what the walking time and the
+    // "your detour cost you N metres" figure have to be measured in.
+    adjacency.get(from).push({ to, weight, length });
     // `bidirectional: false` means one-way — respect it, or the router will happily
     // send people the wrong way up a controlled entry lane.
-    if (edge.bidirectional !== false) adjacency.get(to).push({ to: from, weight });
+    if (edge.bidirectional !== false) adjacency.get(to).push({ to: from, weight, length });
   }
 
   const density = (id) => densityByNode?.get?.(id) ?? 0;
@@ -188,7 +192,7 @@ function cheapestPath(graph, fromId, targetIds, { avoidCrowds = true } = {}) {
       const next = best + edge.weight * penalty;
       if (next < (cost.get(edge.to) ?? Infinity)) {
         cost.set(edge.to, next);
-        distance.set(edge.to, (distance.get(current) ?? 0) + edge.weight);
+        distance.set(edge.to, (distance.get(current) ?? 0) + edge.length);
         previous.set(edge.to, current);
       }
     }

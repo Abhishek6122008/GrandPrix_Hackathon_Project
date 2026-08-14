@@ -10,7 +10,7 @@ spot the pile-up before it forms, and say where to send people instead.
 ```
 ┌──────────────────────────────────────────────────────────────────┐
 │  React (Vite) · port 5173                                        │
-│  CrowdFlowApp.jsx — landing, access, and three role portals      │
+│  CrowdFlowApp.jsx — routes; the screens live beside it in src/   │
 │  LayoutStudio.jsx — floor plan → walkable graph                  │
 │  api.js  REST + bearer token   ·  useLiveSession.js  WebSocket   │
 │  crowdRouting.js — the attendee route, planned around the crowd  │
@@ -164,6 +164,11 @@ Reads are public so the marketing pages and live map work signed-out; writes nee
 `POST /sessions` answers `401` with no token and `403` for a `WALKER` — the split is deliberate,
 so a client can tell "log in" apart from "you are not allowed".
 
+Between the two services the credential is a shared secret rather than a user token: the backend
+sends `X-Service-Token` and the AI service compares it in constant time. Unset on both sides
+turns the check off, which is what keeps a clean checkout runnable, and `/health` is outside the
+gate so container healthchecks still work.
+
 Accounts persist; **simulation runs do not**. Only `app_user` has a table. Making runs durable is
 a change to `SessionManager`, not a config switch. Full detail in
 [`auth-and-database.md`](auth-and-database.md).
@@ -190,8 +195,9 @@ a change to `SessionManager`, not a config switch. Full detail in
 ## Known limits
 
 - **Sessions are in memory** and die with the process. Accounts are the only persisted state.
-- **Nothing rate-limits `/auth/`.** Passwords and reset codes can both be attempted as fast as the
-  network allows. A per-address attempt counter, or a proxy-level limit, is the fix.
+- **Rate limiting is per-process.** `RateLimitFilter` holds its token buckets in memory, so two
+  instances behind a load balancer allow twice the configured rate and a restart clears them.
+  A shared store, or a limit at the proxy, is what makes it exact. See `docs/scaling.md`.
 - **Tokens do not refresh** — 12 hours, then a fresh login.
 - **Attendee position is zone-level and self-declared.** The system simulates a crowd; it does not
   track anyone's phone, and the UI says so instead of drawing a false accuracy circle.

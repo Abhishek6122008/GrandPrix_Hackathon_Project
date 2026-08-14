@@ -26,7 +26,12 @@ globalThis.document = { hidden: false, addEventListener() {}, removeEventListene
 globalThis.IntersectionObserver = class { observe() {} unobserve() {} disconnect() {} };
 globalThis.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
 
-const { VenueMap, RouteBanner, RouteSteps, HazardAlerts } = await import('./CrowdFlowApp.jsx');
+// Imported from the modules that own them rather than through the app's barrel, so this file
+// also pins where each one lives: if the map or the route banner moves again, this breaks here
+// and says so, instead of resolving through a re-export that hides the move.
+const { VenueMap } = await import('./src/VenueMap.jsx');
+const { RouteBanner, RouteSteps } = await import('./src/WalkerApp.jsx');
+const { HazardAlerts } = await import('./src/ClientApp.jsx');
 const { toMapVenue, applyFrame } = await import('./src/venueAdapter.js');
 const { planRoute, rankHazards } = await import('./src/crowdRouting.js');
 

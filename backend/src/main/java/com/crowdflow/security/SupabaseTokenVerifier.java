@@ -26,11 +26,14 @@ import java.util.Optional;
 public class SupabaseTokenVerifier implements TokenVerifier {
 
     private final SecretKey key;
+    private final String issuer;
 
-    public SupabaseTokenVerifier(@Value("${auth.supabase.jwt-secret:}") String secret) {
+    public SupabaseTokenVerifier(@Value("${auth.supabase.jwt-secret:}") String secret,
+                                 @Value("${auth.supabase.issuer:}") String issuer) {
         this.key = (secret == null || secret.isBlank())
                 ? null
                 : Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
+        this.issuer = issuer == null ? "" : issuer.trim();
     }
 
     @Override public String name() { return "SUPABASE"; }
@@ -41,7 +44,15 @@ public class SupabaseTokenVerifier implements TokenVerifier {
     public Optional<AuthPrincipal> verify(String token) {
         if (key == null) return Optional.empty();
         try {
-            Claims c = Jwts.parser().verifyWith(key).build().parseSignedClaims(token).getPayload();
+            // The signature already proves the token came from a project holding this secret,
+            // so pinning the issuer is defence in depth rather than the load-bearing check — it
+            // is here because the local verifier pins its own issuer, and two verifiers that
+            // disagree about how careful to be is how the careless one gets overlooked.
+            // Optional, because the secret alone is a complete check and requiring the URL
+            // would break every deployment that has not set it.
+            var parser = Jwts.parser().verifyWith(key);
+            if (!issuer.isBlank()) parser.requireIssuer(issuer);
+            Claims c = parser.build().parseSignedClaims(token).getPayload();
 
             AppUser.Role role = AppUser.Role.WALKER;
             Object meta = c.get("app_metadata");
