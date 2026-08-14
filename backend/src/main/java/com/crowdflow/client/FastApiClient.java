@@ -12,8 +12,9 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -42,13 +43,33 @@ public class FastApiClient {
     private final RestClient restClient;
     private final MlServiceConfig config;
 
-    // ponytail: two threads is plenty — one in-flight call per session and only a handful of
-    // sessions in a demo. Size this from expected concurrent sessions if that stops being true.
-    private final ExecutorService executor = Executors.newFixedThreadPool(2, runnable -> {
-        Thread thread = new Thread(runnable, "fastapi-analyse");
-        thread.setDaemon(true);
-        return thread;
-    });
+    /**
+     * Bounded pool with a bounded queue, and a rejection policy that drops rather than blocks.
+     *
+     * <p>This used to be {@code Executors.newFixedThreadPool(2)}, which sounds bounded and is
+     * not: that factory pairs the two threads with an <em>unbounded</em> LinkedBlockingQueue.
+     * Two threads cap concurrency against the AI service, but nothing capped the backlog, so a
+     * burst of sessions ticking faster than the service answers grew the queue without limit.
+     * The visible failure is not an error — it is the advisory arriving minutes late, computed
+     * from densities that stopped being true, while the heap fills with queued snapshots.
+     *
+     * <p>A bounded queue converts that into an honest, immediate signal. {@code DiscardOldest}
+     * is the right policy for this data specifically: every task carries a snapshot of current
+     * density, so when the service cannot keep up, the freshest snapshot is the one worth
+     * keeping and the stale one at the head of the queue is the one worth losing. Blocking the
+     * caller would stall the simulation tick, and blocking the tick to talk to an optional
+     * subsystem is exactly what the fallback contract exists to prevent.
+     */
+    private final ExecutorService executor = new ThreadPoolExecutor(
+            2, 2,
+            0L, TimeUnit.MILLISECONDS,
+            new ArrayBlockingQueue<>(64),
+            runnable -> {
+                Thread thread = new Thread(runnable, "fastapi-analyse");
+                thread.setDaemon(true);
+                return thread;
+            },
+            new ThreadPoolExecutor.DiscardOldestPolicy());
 
     public FastApiClient(RestClient analyzeRestClient, MlServiceConfig config) {
         this.restClient = analyzeRestClient;

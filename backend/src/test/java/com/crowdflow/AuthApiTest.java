@@ -31,6 +31,11 @@ import org.springframework.test.web.servlet.ResultActions;
  * failure and dies with an I/O error instead of surfacing the 401/403 being asserted.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
+        // Rate limiting off: these cases exercise the auth rules, and they drive far more
+        // logins and registrations from one loopback address than a real user ever would, so
+        // the limiter would refuse them for being a test rather than for being wrong. That the
+        // limiter itself works is asserted separately, in RateLimitTest.
+        "security.rate-limit.enabled=false",
         // Pin the reset-code delivery path instead of inheriting whatever the machine has.
         //
         // The code is returned in the response only when it was not delivered anywhere else, so

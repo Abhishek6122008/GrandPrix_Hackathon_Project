@@ -1,6 +1,30 @@
 server:
   port: 8080
 
+  # --- connection handling ---------------------------------------------------
+  # Tomcat is blocking-IO: one thread per in-flight request. `threads.max` is therefore the
+  # number of requests actually being served at once, while `max-connections` is how many
+  # sockets may be accepted and parked waiting for one of those threads. The gap between the
+  # two is deliberate — most connections here are idle between polls, so accepting far more
+  # than we can simultaneously execute is correct, and the queue drains at the rate the
+  # thread pool retires work.
+  #
+  # `accept-count` is the OS backlog once even max-connections is reached. Beyond that the
+  # kernel refuses the TCP handshake, which a client sees as connection refused rather than
+  # as a slow request. That is the intended failure: fast rejection over unbounded latency.
+  tomcat:
+    threads:
+      max: ${TOMCAT_MAX_THREADS:200}
+      min-spare: ${TOMCAT_MIN_SPARE:25}
+    max-connections: ${TOMCAT_MAX_CONNECTIONS:10000}
+    accept-count: ${TOMCAT_ACCEPT_COUNT:200}
+    connection-timeout: 20s
+
+  compression:
+    enabled: true
+    mime-types: application/json,text/html,text/css,application/javascript
+    min-response-size: 1024
+
 spring:
   application:
     name: crowd-flow-optimiser
@@ -44,6 +68,16 @@ spring:
     url: ${DB_URL:jdbc:h2:file:./data/crowdflow;AUTO_SERVER=TRUE;DB_CLOSE_DELAY=-1}
     username: ${DB_USERNAME:sa}
     password: ${DB_PASSWORD:}
+    hikari:
+      # A pool larger than the database can serve does not add throughput, it just moves the
+      # queue from the application into the database and makes every query slower at once.
+      # Requests wait here instead, and `connection-timeout` bounds that wait so a saturated
+      # pool returns an error rather than hanging the request thread indefinitely.
+      maximum-pool-size: ${DB_POOL_SIZE:20}
+      minimum-idle: ${DB_POOL_MIN_IDLE:5}
+      connection-timeout: 10000
+      max-lifetime: 1800000
+      leak-detection-threshold: 20000
   jpa:
     open-in-view: false
     hibernate:
@@ -181,6 +215,10 @@ social-force:
   wall-range: 2.0
 
 ml-service:
+  # Shared secret for the backend -> AI service hop. Must match AI_SERVICE_TOKEN on the AI
+  # side. Empty on both sides is the supported local state; set on only one side refuses
+  # every call.
+  service-token: ${ML_SERVICE_TOKEN:}
   # FastAPI AI layer (see ../../ml-service). POST /analyze fans out to two Hugging Face
   # Inference API endpoints; /predict/risk and /generate/advisory are the self-hosted
   # fallback path that needs no network.
@@ -195,6 +233,43 @@ ml-service:
   timeout-ms: 4000
   # /analyze waits on two remote model calls, so it gets its own, much longer budget.
   analyze-timeout-ms: 20000
+
+# --- observability ------------------------------------------------------------
+# Only the endpoints listed here exist at all, and SecurityConfig additionally requires
+# ROLE_ADMIN for everything except the probes. Two independent gates, because the expensive
+# mistake (/env, /heapdump, /loggers reachable anonymously) is one config line away.
+#
+# `caches` and `metrics` are what make the load work measurable: cache hit ratio and
+# http.server.requests latency percentiles are the two numbers that say whether the caching
+# is earning its place.
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,caches
+  endpoint:
+    health:
+      # Never print component detail (database URLs, disk paths) to an anonymous prober.
+      show-details: when-authorized
+      probes:
+        enabled: true
+  metrics:
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+
+# --- request caps -------------------------------------------------------------
+security:
+  rate-limit:
+    enabled: ${RATE_LIMIT_ENABLED:true}
+    # Bounded so the limiter cannot itself be used to exhaust the heap: the attacker chooses
+    # the keys, so the key space must not be the attacker's to grow.
+    max-tracked-clients: ${RATE_LIMIT_MAX_CLIENTS:200000}
+    # Leave false unless a proxy in front of this service OVERWRITES X-Forwarded-For. If it
+    # merely appends, or if the service is reachable directly, trusting the header hands every
+    # caller a rate-limit bypass: a fresh spoofed value per request means a fresh bucket per
+    # request.
+    trust-forwarded-for: ${RATE_LIMIT_TRUST_XFF:false}
 
 logging:
   level:

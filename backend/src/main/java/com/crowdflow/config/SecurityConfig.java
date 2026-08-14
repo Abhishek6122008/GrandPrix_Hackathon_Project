@@ -2,7 +2,9 @@ package com.crowdflow.config;
 
 import com.crowdflow.repository.UserRepository;
 import com.crowdflow.security.JwtAuthFilter;
+import com.crowdflow.security.RateLimitFilter;
 import com.crowdflow.security.TokenVerifier;
+import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
@@ -34,9 +36,27 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 public class SecurityConfig {
 
     private final JwtAuthFilter jwtAuthFilter;
+    private final RateLimitFilter rateLimitFilter;
 
-    public SecurityConfig(java.util.List<TokenVerifier> verifiers, UserRepository users) {
+    public SecurityConfig(java.util.List<TokenVerifier> verifiers, UserRepository users,
+                          RateLimitFilter rateLimitFilter) {
         this.jwtAuthFilter = new JwtAuthFilter(verifiers, users);
+        this.rateLimitFilter = rateLimitFilter;
+    }
+
+    /**
+     * Stops Boot from also auto-registering the rate limiter in the plain servlet chain.
+     *
+     * Any {@code Filter} bean is picked up and added to the servlet chain by default. The
+     * limiter is placed explicitly in the security chain below so its position relative to
+     * authentication is defined rather than incidental, and registering it twice would make
+     * that ordering ambiguous.
+     */
+    @Bean
+    public FilterRegistrationBean<RateLimitFilter> rateLimitFilterRegistration(RateLimitFilter filter) {
+        FilterRegistrationBean<RateLimitFilter> registration = new FilterRegistrationBean<>(filter);
+        registration.setEnabled(false);
+        return registration;
     }
 
     @Bean
@@ -54,7 +74,15 @@ public class SecurityConfig {
             .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
                 // --- open ---------------------------------------------------------------
-                .requestMatchers("/auth/**", "/health", "/actuator/**").permitAll()
+                .requestMatchers("/auth/**", "/health").permitAll()
+                // Actuator is split rather than blanket-permitted. A load balancer needs the
+                // liveness probes anonymously, but the rest of the tree is not harmless:
+                // /env and /configprops print resolved configuration including secrets,
+                // /heapdump hands over process memory, and /loggers takes POSTs that change
+                // log levels at runtime. Exposure is also restricted in application.yml, so
+                // enabling an endpoint there still does not make it public here.
+                .requestMatchers("/actuator/health", "/actuator/health/**", "/actuator/info").permitAll()
+                .requestMatchers("/actuator/**").hasRole("ADMIN")
                 // The WebSocket carries its own session id in the URL and is authorised by
                 // the handler; the handshake itself cannot send an Authorization header.
                 .requestMatchers("/ws/**").permitAll()
@@ -85,6 +113,7 @@ public class SecurityConfig {
 
                 .anyRequest().authenticated())
             .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class)
+            .addFilterBefore(rateLimitFilter, JwtAuthFilter.class)
             // Fail as a JSON API, not as a browser login prompt.
             //
             // The default entry point answers 401 with a WWW-Authenticate challenge, which is

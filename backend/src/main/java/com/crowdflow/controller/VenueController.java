@@ -1,5 +1,6 @@
 package com.crowdflow.controller;
 
+import com.crowdflow.config.CacheConfig;
 import com.crowdflow.dto.GeorefRequest;
 import com.crowdflow.model.ReroutePath;
 import com.crowdflow.model.Venue;
@@ -12,6 +13,9 @@ import com.crowdflow.service.VenueValidator;
 import com.crowdflow.service.geo.Georef;
 import com.crowdflow.service.routing.RerouteEngine;
 import jakarta.validation.Valid;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
+import org.springframework.cache.annotation.Caching;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -39,15 +43,28 @@ public class VenueController {
         this.routeEngine = routeEngine;
     }
 
-    /** Uploads a venue layout. An id is generated when the payload omits one. */
+    /**
+     * Uploads a venue layout. An id is generated when the payload omits one.
+     *
+     * <p>Clears all three read caches rather than just this venue's entry. The list cache is
+     * a single entry covering every venue, and a new or changed layout invalidates any route
+     * previously computed over it, so a targeted eviction would leave stale paths pointing
+     * through walls that moved.
+     */
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
+    @Caching(evict = {
+            @CacheEvict(cacheNames = CacheConfig.VENUES, allEntries = true),
+            @CacheEvict(cacheNames = CacheConfig.VENUE_LIST, allEntries = true),
+            @CacheEvict(cacheNames = CacheConfig.VENUE_ROUTES, allEntries = true)
+    })
     public Venue create(@Valid @RequestBody Venue venue) {
         VenueValidator.validate(venue);
         return venues.save(venue);
     }
 
     @GetMapping("/{id}")
+    @Cacheable(cacheNames = CacheConfig.VENUES, key = "#id")
     public Venue get(@PathVariable String id) {
         return venues.getOrThrow(id);
     }
@@ -62,6 +79,7 @@ public class VenueController {
      * one session, and this endpoint is what makes the code outlive it too.
      */
     @GetMapping
+    @Cacheable(cacheNames = CacheConfig.VENUE_LIST)
     public List<Venue> list() {
         return venues instanceof FileVenueRepository store ? store.findAll() : List.of();
     }
@@ -78,6 +96,7 @@ public class VenueController {
      * no session running. Diversions around a jam arrive on the session stream instead.
      */
     @GetMapping("/{id}/route")
+    @Cacheable(cacheNames = CacheConfig.VENUE_ROUTES, key = "#id + '|' + #from")
     public ReroutePath route(@PathVariable String id, @RequestParam String from) {
         Venue venue = venues.getOrThrow(id);
         if (!venue.nodesById().containsKey(from)) {

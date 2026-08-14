@@ -22,7 +22,7 @@ import logging
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 # Load .env before anything reads os.environ. Never commit that file — see README.md.
@@ -32,6 +32,7 @@ from app import scoring  # noqa: E402  (must follow load_dotenv)
 from app.advisory_local import local_advisory  # noqa: E402
 from app.config import settings  # noqa: E402
 from app.gnn_local import local_gnn  # noqa: E402
+from app import security  # noqa: E402
 from app.routers import advisory, analyze, risk  # noqa: E402
 from app.tinybert_local import tinybert_risk  # noqa: E402
 
@@ -64,6 +65,8 @@ async def lifespan(app: FastAPI):
     raises: a missing checkpoint or an absent torch install is an expected state, reported at
     /health, not a reason the service will not start.
     """
+    security.warn_if_open()
+
     tinybert_risk.load()
     local_gnn.load()
     local_advisory.load()
@@ -100,12 +103,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(analyze.router)
-app.include_router(risk.router)
-app.include_router(advisory.router)
+# The shared-secret gate is applied per router rather than as middleware so that /health
+# stays reachable without it: docker-compose and any load balancer probe it, and a probe that
+# needs a credential is a probe that reports the service down when the credential is wrong.
+_guard = [Depends(security.require_service_token)]
+
+app.include_router(analyze.router, dependencies=_guard)
+app.include_router(risk.router, dependencies=_guard)
+app.include_router(advisory.router, dependencies=_guard)
 
 if layout_router is not None:
-    app.include_router(layout_router.router)
+    app.include_router(layout_router.router, dependencies=_guard)
 else:
     log.warning(
         "Layout endpoints disabled — %s. Install with: "
@@ -147,5 +155,6 @@ def health() -> dict:
             "available": layout_router is not None,
             "error": LAYOUT_IMPORT_ERROR,
         },
+        "serviceToken": security.describe(),
         "config": config,
     }

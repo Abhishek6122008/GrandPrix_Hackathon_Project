@@ -133,7 +133,8 @@ public class AuthController {
                           ResetCodeMailer mailer,
                           @Value("${auth.reset.expose-code:true}") boolean exposeResetCode,
                           @Value("${auth.reset.ttl-minutes:30}") long resetTtlMinutes,
-                          @Value("${auth.admin-emails:}") String adminEmails) {
+                          @Value("${auth.admin-emails:}") String adminEmails,
+                          org.springframework.core.env.Environment environment) {
         this.users = users;
         this.encoder = encoder;
         this.jwt = jwt;
@@ -150,6 +151,28 @@ public class AuthController {
         }
         log.info("Password reset delivery: {}{}", mailer.status(), mailer.enabled() ? ""
                 : " — codes are logged" + (exposeResetCode ? " and returned to the caller" : " only"));
+
+        // Returning the reset code in the response is account takeover as a feature: the
+        // endpoint accepts any address from anyone without proving ownership, so whoever types
+        // an address gets the code for it. application-cloud.yml turns it off, but that is one
+        // file away from being edited, and this is too severe to leave to a single override.
+        //
+        // Refused outright under the cloud profile; noisy everywhere else, because a local
+        // demo genuinely needs it and losing that would mean nobody can try the reset flow
+        // without standing up a mail server.
+        if (exposeResetCode) {
+            boolean deployed = String.join(",", environment.getActiveProfiles()).contains("cloud");
+            if (deployed) {
+                throw new IllegalStateException(
+                        "auth.reset.expose-code is true under the cloud profile. The reset "
+                        + "endpoint takes any address without proof of ownership, so returning "
+                        + "the code hands over any account to anyone who asks. Set "
+                        + "AUTH_EXPOSE_RESET_CODE=false.");
+            }
+            log.warn("auth.reset.expose-code is ON: password reset codes are returned in the "
+                     + "HTTP response. Anyone who can reach this API can take over any account. "
+                     + "Local development only.");
+        }
     }
 
     @PostMapping("/register")

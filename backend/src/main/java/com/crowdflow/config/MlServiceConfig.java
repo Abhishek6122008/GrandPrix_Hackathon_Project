@@ -18,6 +18,15 @@ import org.springframework.web.client.RestClient;
 @ConfigurationProperties(prefix = "ml-service")
 public class MlServiceConfig {
 
+    /**
+     * Shared secret presented to the AI service as {@code X-Service-Token}.
+     *
+     * Empty by default so a clean checkout runs with no configuration, matching the AI
+     * service's own behaviour. Set {@code ML_SERVICE_TOKEN} on both sides together: setting
+     * it on only one of them means every inference call is refused.
+     */
+    private String serviceToken = "";
+
     private String baseUrl = "http://localhost:8000";
     private String riskPath = "/predict/risk";
     private String advisoryPath = "/generate/advisory";
@@ -63,9 +72,21 @@ public class MlServiceConfig {
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(Duration.ofMillis(Math.min(millis, 5_000)));
         factory.setReadTimeout(Duration.ofMillis(millis));
-        return RestClient.builder().requestFactory(factory).build();
+
+        RestClient.Builder builder = RestClient.builder().requestFactory(factory);
+        // Presented to the AI service on every call. It is the only thing separating "the
+        // backend asked for an inference" from "anyone who can reach port 8000 did". Blank
+        // means the shared secret is unconfigured on both sides, which is the supported
+        // local-development state; the AI service warns about it at startup rather than
+        // failing, so sending an empty header here would be noise.
+        if (serviceToken != null && !serviceToken.isBlank()) {
+            builder = builder.defaultHeader("X-Service-Token", serviceToken);
+        }
+        return builder.build();
     }
 
+    public String getServiceToken() { return serviceToken; }
+    public void setServiceToken(String serviceToken) { this.serviceToken = serviceToken; }
     public String getBaseUrl() { return baseUrl; }
     public void setBaseUrl(String baseUrl) { this.baseUrl = baseUrl; }
     public String getRiskPath() { return riskPath; }
