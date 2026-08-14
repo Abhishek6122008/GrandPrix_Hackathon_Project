@@ -2,6 +2,7 @@ package com.crowdflow.config;
 
 import com.crowdflow.model.AppUser;
 import com.crowdflow.repository.UserRepository;
+import com.crowdflow.security.AdminAllowlist;
 import com.crowdflow.security.PasswordPolicy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -12,9 +13,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.Arrays;
 import java.util.List;
-import java.util.Locale;
 
 /**
  * Makes sure the allowlisted admin accounts exist before anyone tries to sign in.
@@ -49,14 +48,11 @@ public class AdminSeeder implements ApplicationRunner {
     private final String adminPassword;
 
     public AdminSeeder(UserRepository users, PasswordEncoder encoder,
-                       @Value("${auth.admin-emails:}") String adminEmails,
+                       AdminAllowlist adminAllowlist,
                        @Value("${auth.admin-password:}") String adminPassword) {
         this.users = users;
         this.encoder = encoder;
-        this.adminEmails = Arrays.stream(adminEmails.split(","))
-                .map(e -> e.trim().toLowerCase(Locale.ROOT))
-                .filter(e -> !e.isEmpty())
-                .toList();
+        this.adminEmails = adminAllowlist.emails();
         this.adminPassword = adminPassword;
     }
 

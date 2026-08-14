@@ -38,8 +38,11 @@ public class JwtAuthFilter extends OncePerRequestFilter {
 
     private final List<TokenVerifier> verifiers;
     private final UserRepository users;
+    private final AdminAllowlist adminAllowlist;
 
-    public JwtAuthFilter(List<TokenVerifier> verifiers, UserRepository users) {
+    public JwtAuthFilter(List<TokenVerifier> verifiers, UserRepository users,
+                         AdminAllowlist adminAllowlist) {
+        this.adminAllowlist = adminAllowlist;
         this.verifiers = verifiers;
         this.users = users;
     }
@@ -93,10 +96,14 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                     return existing;
                 })
                 .orElseGet(() -> {
+                    // The provider decides who you are; this application decides what that is
+                    // worth here. A `role` claim is the provider's opinion, and ADMIN is not
+                    // theirs to grant — see AdminAllowlist.clamp.
                     AppUser created = new AppUser(
                             principal.email() != null ? principal.email()
                                     : principal.provider().toLowerCase() + ":" + principal.userId(),
-                            null, principal.role(), principal.provider());
+                            null, adminAllowlist.clamp(principal.role(), principal.email()),
+                            principal.provider());
                     created.setProviderSubject(principal.userId());
                     return users.save(created);
                 });

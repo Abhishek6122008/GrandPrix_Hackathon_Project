@@ -27,8 +27,12 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+    # Loopback only. The backend reaches Postgres over the compose network by service name, so
+    # this mapping exists purely so a developer can attach psql — and "0.0.0.0:5432" would put
+    # the database on every interface of whatever host runs the stack, including a laptop on
+    # conference wifi. Set POSTGRES_PORT to change the port, not the binding.
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
 
   ai-service:
     build:
@@ -44,8 +48,11 @@ services:
       # the port is published, so without this anyone who can reach 8000 can spend the CPU.
       # Must match ML_SERVICE_TOKEN on the backend below.
       AI_SERVICE_TOKEN: ${AI_SERVICE_TOKEN:-compose-local-ai-token-change-before-deploying}
+    # Loopback only, for the same reason. The shared token above is the check that matters, but
+    # a port not reachable from the network is one an attacker never gets to try it against.
+    # Still available at localhost:8000 for /docs.
     ports:
-      - "${AI_PORT:-8000}:8000"
+      - "127.0.0.1:${AI_PORT:-8000}:8000"
     restart: unless-stopped
 
   backend:

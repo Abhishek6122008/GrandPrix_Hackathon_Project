@@ -1,6 +1,7 @@
 package com.crowdflow.config;
 
 import com.crowdflow.repository.UserRepository;
+import com.crowdflow.security.AdminAllowlist;
 import com.crowdflow.security.JwtAuthFilter;
 import com.crowdflow.security.RateLimitFilter;
 import com.crowdflow.security.TokenVerifier;
@@ -39,8 +40,8 @@ public class SecurityConfig {
     private final RateLimitFilter rateLimitFilter;
 
     public SecurityConfig(java.util.List<TokenVerifier> verifiers, UserRepository users,
-                          RateLimitFilter rateLimitFilter) {
-        this.jwtAuthFilter = new JwtAuthFilter(verifiers, users);
+                          RateLimitFilter rateLimitFilter, AdminAllowlist adminAllowlist) {
+        this.jwtAuthFilter = new JwtAuthFilter(verifiers, users, adminAllowlist);
         this.rateLimitFilter = rateLimitFilter;
     }
 

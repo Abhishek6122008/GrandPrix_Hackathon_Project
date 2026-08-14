@@ -113,6 +113,7 @@ pipeline {
                     set -e
                     docker compose up -d --wait
                     docker compose ps
+                    ci/smoke-stack.sh
                 '''
             }
             post {

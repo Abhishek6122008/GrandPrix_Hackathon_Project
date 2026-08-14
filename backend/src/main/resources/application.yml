@@ -138,6 +138,9 @@ auth:
   # issued are accepted alongside locally-minted ones.
   supabase:
     jwt-secret: ${SUPABASE_JWT_SECRET:}
+    # Optional. Set it to https://<project>.supabase.co/auth/v1 and a token from any other
+    # project is refused even if it somehow carried a matching signature.
+    issuer: ${SUPABASE_ISSUER:}
   firebase:
     project-id: ${FIREBASE_PROJECT_ID:}
 

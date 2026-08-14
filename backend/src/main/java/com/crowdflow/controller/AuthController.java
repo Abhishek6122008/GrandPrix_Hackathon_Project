@@ -2,6 +2,7 @@ package com.crowdflow.controller;
 
 import com.crowdflow.model.AppUser;
 import com.crowdflow.repository.UserRepository;
+import com.crowdflow.security.AdminAllowlist;
 import com.crowdflow.security.AuthPrincipal;
 import com.crowdflow.security.JwtService;
 import com.crowdflow.security.PasswordPolicy;
@@ -24,13 +25,10 @@ import org.springframework.web.server.ResponseStatusException;
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
-import java.util.Set;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 
 /**
  * Registration, login and password recovery for locally-held accounts.
@@ -127,13 +125,13 @@ public class AuthController {
     private final ResetCodeMailer mailer;
     private final boolean exposeResetCode;
     private final Duration resetTtl;
-    private final Set<String> adminEmails;
+    private final AdminAllowlist adminEmails;
 
     public AuthController(UserRepository users, PasswordEncoder encoder, JwtService jwt,
                           ResetCodeMailer mailer,
                           @Value("${auth.reset.expose-code:true}") boolean exposeResetCode,
                           @Value("${auth.reset.ttl-minutes:30}") long resetTtlMinutes,
-                          @Value("${auth.admin-emails:}") String adminEmails,
+                          AdminAllowlist adminEmails,
                           org.springframework.core.env.Environment environment) {
         this.users = users;
         this.encoder = encoder;
@@ -141,10 +139,7 @@ public class AuthController {
         this.mailer = mailer;
         this.exposeResetCode = exposeResetCode;
         this.resetTtl = Duration.ofMinutes(resetTtlMinutes);
-        this.adminEmails = Arrays.stream(adminEmails.split(","))
-                .map(AuthController::normalise)
-                .filter(s -> !s.isEmpty())
-                .collect(Collectors.toUnmodifiableSet());
+        this.adminEmails = adminEmails;
 
         if (!this.adminEmails.isEmpty()) {
             log.info("Admin allowlist active for {} address(es)", this.adminEmails.size());
@@ -351,7 +346,7 @@ public class AuthController {
     private static String validatedAvatar(String avatar) {
         if (!AVATAR_PATTERN.matcher(avatar).find()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "Avatar must be an inline PNG, JPEG, WEBP, GIF or SVG image");
+                    "Avatar must be an inline PNG, JPEG, WEBP or GIF image");
         }
         if (avatar.length() > AVATAR_MAX_CHARS) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
@@ -361,7 +356,7 @@ public class AuthController {
     }
 
     private static final Pattern AVATAR_PATTERN =
-            Pattern.compile("^data:image/(png|jpeg|jpg|webp|gif|svg\\+xml);base64,[A-Za-z0-9+/=\\s]+$");
+            Pattern.compile("^data:image/(png|jpeg|jpg|webp|gif);base64,[A-Za-z0-9+/=\\s]+$");
 
     /**
      * Reconcile the account's role with the door it just signed in at.
@@ -409,7 +404,7 @@ public class AuthController {
     }
 
     private boolean isPlatformAdmin(String email) {
-        return email != null && adminEmails.contains(normalise(email));
+        return adminEmails.contains(email);
     }
 
     private static String normalise(String email) {

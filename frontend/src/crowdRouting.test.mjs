@@ -82,6 +82,27 @@ test('diverts around a jammed zone and says what that cost', () => {
   assert.equal(route.detourCost, 12); // 32m around vs 20m through
 });
 
+test('distance is metres over the ground, whatever the corridor width', () => {
+  // Width divides the routing cost, because a wide corridor moves a crowd better at the same
+  // density. It must not divide the reported distance: that number is what the attendee is
+  // told they have to walk and what etaSeconds is derived from. Every other fixture here uses
+  // width 4 — the one value where cost and length happen to be equal — so a distance measured
+  // in cost units would pass all of them and still be wrong on any real venue.
+  const wide = {
+    id: 'wide',
+    nodes: [
+      { id: 'A', name: 'Start', type: 'GATE', capacity: 100, x: 0, y: 0 },
+      { id: 'Z', name: 'Exit', type: 'EXIT', capacity: 100, x: 100, y: 0 },
+    ],
+    edges: [{ from: 'A', to: 'Z', length: 100, width: 12, bidirectional: true }],
+  };
+
+  const route = planRoute(wide, toMapVenue(wide), 'A', null);
+
+  assert.equal(route.distance, 100);
+  assert.equal(route.etaSeconds, Math.round(100 / 1.3));
+});
+
 test('a mildly busy short route still beats a long detour', () => {
   // The failure this pins: a penalty steep enough to divert at 0.9 must not be so steep
   // that it also diverts at 0.45, or every attendee gets sent the long way round all day.

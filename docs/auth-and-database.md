@@ -229,8 +229,11 @@ Three things suit a demo but not production:
 - **Reset mail is unauthenticated in both directions.** Nothing verifies that the address
   belongs to whoever typed it beyond the code itself, and the mail is plain text over STARTTLS.
   Fine for a code that expires in 30 minutes; not a channel for anything else.
-- **Nothing rate-limits `/auth/**`.** Passwords and reset codes can both be attempted as fast
-  as the network allows. A per-address attempt counter, or a proxy-level limit, is the fix.
+- **Rate limiting is per-process.** `RateLimitFilter` runs ahead of authentication with four
+  token-bucket tiers, so a login attempt is refused before it costs the ~50ms of BCrypt that
+  made the guess and the denial of service the same request. The buckets live in memory, which
+  means two instances behind a load balancer allow twice the configured rate and a restart
+  forgets everything. A shared store, or a limit at the proxy, is what makes it exact.
 - **Tokens do not refresh.** They last 12 hours and then require a fresh login. Adding refresh
   tokens means a second table and a rotation endpoint.
 

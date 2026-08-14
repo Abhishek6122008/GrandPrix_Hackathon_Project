@@ -2,6 +2,7 @@ package com.crowdflow;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -325,5 +326,44 @@ class AuthApiTest {
         assertThat(field(body, "message"))
                 .isEqualTo("If that address has an account, a reset code is on its way.");
         assertThat(field(body, "code")).isNull();
+    }
+
+    @Test
+    void anInlineRasterAvatarIsAccepted() throws Exception {
+        String token = register("client");
+        // A 1x1 GIF, which is the shortest real image there is.
+        String gif = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+
+        mvc.perform(patch("/auth/profile").header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"avatar\":\"" + gif + "\"}"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void anSvgAvatarIsRefused() throws Exception {
+        // An SVG is a document rather than an image — it can carry script, and it is inert only
+        // while every render path uses <img>. That is a promise about future frontend edits, not
+        // a property of the validator, so the format is refused outright. The client re-encodes
+        // every picked file to JPEG through a canvas, so nothing in the app can reach this.
+        String token = register("client");
+        String svg = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciLz4=";
+
+        mvc.perform(patch("/auth/profile").header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"avatar\":\"" + svg + "\"}"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void aRemoteAvatarUrlIsRefused() throws Exception {
+        // Rendering one would let a profile choose which third-party host every viewer's browser
+        // calls, which is a tracking pixel with extra steps.
+        String token = register("client");
+
+        mvc.perform(patch("/auth/profile").header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"avatar\":\"https://example.com/avatar.png\"}"))
+                .andExpect(status().isBadRequest());
     }
 }
