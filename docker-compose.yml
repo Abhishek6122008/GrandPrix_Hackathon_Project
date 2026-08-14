@@ -39,6 +39,11 @@ services:
       # Nothing required. With no HF token and no model configured the service answers from
       # app/scoring.py, which is exactly how a clean checkout runs.
       HF_API_TOKEN: ${HF_API_TOKEN:-}
+
+      # Shared secret for the backend -> AI hop. Every inference route here is expensive and
+      # the port is published, so without this anyone who can reach 8000 can spend the CPU.
+      # Must match ML_SERVICE_TOKEN on the backend below.
+      AI_SERVICE_TOKEN: ${AI_SERVICE_TOKEN:-compose-local-ai-token-change-before-deploying}
     ports:
       - "${AI_PORT:-8000}:8000"
     restart: unless-stopped
@@ -64,6 +69,7 @@ services:
       AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:-compose-local-only-secret-change-before-deploying-0000}
 
       ML_SERVICE_URL: http://ai-service:8000
+      ML_SERVICE_TOKEN: ${AI_SERVICE_TOKEN:-compose-local-ai-token-change-before-deploying}
 
       # The browser talks to the backend from the host, so the origin it presents is the host's
       # frontend port, not the container's.

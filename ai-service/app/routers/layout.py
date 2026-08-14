@@ -38,6 +38,37 @@ router = APIRouter(prefix="/layout", tags=["layout"])
 MAX_UPLOAD_BYTES = 12 * 1024 * 1024
 ALLOWED_TYPES = {"image/png", "image/jpeg", "image/jpg", "image/webp"}
 
+#: Chunk size for the bounded read below. Large enough that an honest 12MB plan costs a
+#: handful of iterations, small enough that the overshoot before we bail is negligible.
+_READ_CHUNK = 256 * 1024
+
+
+async def _read_bounded(upload: UploadFile, limit: int) -> bytes:
+    """
+    Read an upload without letting the caller decide how much memory we allocate.
+
+    ``await upload.read()`` with no argument materialises the entire body and only then can
+    the result be measured, so a limit checked afterwards is enforced too late: a request
+    that sends 2GB has already been given 2GB of process memory by the time the 12MB check
+    runs, and a handful of concurrent ones take the service down. Reading in chunks and
+    stopping one chunk past the limit costs the same for legitimate uploads and caps the
+    damage from the rest.
+    """
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await upload.read(_READ_CHUNK)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > limit:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Upload exceeds the {limit // 1024 // 1024}MB limit.",
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
 
 class ConfirmRequest(BaseModel):
     """The operator's edited graph, straight from the map editor."""
@@ -77,13 +108,7 @@ async def parse_layout(
             detail=f"Unsupported type {layout.content_type!r}. Use PNG, JPG or WEBP.",
         )
 
-    data = await layout.read()
-    if len(data) > MAX_UPLOAD_BYTES:
-        raise HTTPException(
-            status_code=413,
-            detail=f"Upload is {len(data) // 1024 // 1024}MB; the limit is "
-            f"{MAX_UPLOAD_BYTES // 1024 // 1024}MB.",
-        )
+    data = await _read_bounded(layout, MAX_UPLOAD_BYTES)
     if not data:
         raise HTTPException(status_code=400, detail="Empty upload.")
 
@@ -154,15 +179,9 @@ async def preview_mask(
             status_code=415,
             detail=f"Unsupported type {layout.content_type!r}. Use PNG, JPG or WEBP.",
         )
-    data = await layout.read()
+    data = await _read_bounded(layout, MAX_UPLOAD_BYTES)
     if not data:
         raise HTTPException(status_code=400, detail="Empty upload.")
-    if len(data) > MAX_UPLOAD_BYTES:
-        raise HTTPException(
-            status_code=413,
-            detail=f"Upload is {len(data) // 1024 // 1024}MB; the limit is "
-            f"{MAX_UPLOAD_BYTES // 1024 // 1024}MB.",
-        )
 
     image = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
     if image is None:

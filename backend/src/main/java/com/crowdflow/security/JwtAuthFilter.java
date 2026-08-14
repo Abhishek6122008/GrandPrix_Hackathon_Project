@@ -102,10 +102,15 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                 });
     }
 
-    /** The WebSocket handshake and public endpoints do not carry a token; skip the work. */
+    /**
+     * The WebSocket handshake cannot send an Authorization header, so there is nothing to read.
+     *
+     * Actuator is deliberately NOT skipped any more. Everything below /actuator except the
+     * probes now requires ROLE_ADMIN, and a filter that never parses the token would leave the
+     * caller anonymous — making that rule impossible to satisfy rather than merely strict.
+     */
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        String path = request.getServletPath();
-        return path.startsWith("/ws") || path.startsWith("/actuator");
+        return RequestPaths.of(request).startsWith("/ws");
     }
 }

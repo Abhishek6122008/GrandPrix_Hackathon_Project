@@ -34,6 +34,29 @@
       <artifactId>spring-boot-starter-validation</artifactId>
     </dependency>
 
+    <!-- ================= load handling =================
+         Caffeine backs two things that both have to survive a crowd: the response cache in
+         front of the venue reads, and the token buckets in RateLimitFilter. Both need bounded
+         size with expiry rather than a plain map, because an unbounded map keyed by client IP
+         is itself a way to exhaust the heap.
+
+         Actuator is here for /actuator/health as a load-balancer probe and /actuator/metrics
+         to see cache hit rates and rejected requests under load. Everything below /actuator
+         except the probes requires ROLE_ADMIN — see SecurityConfig — and exposure is limited
+         in application.yml on top of that. -->
+    <dependency>
+      <groupId>com.github.ben-manes.caffeine</groupId>
+      <artifactId>caffeine</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-cache</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-actuator</artifactId>
+    </dependency>
+
     <!-- ================= auth + persistence =================
          Security here is a resource-server story: the app holds no HTTP session, it verifies
          a bearer token per request. That is what lets one code path accept tokens minted

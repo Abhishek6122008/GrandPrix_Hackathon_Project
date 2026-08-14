@@ -23,6 +23,11 @@ import org.springframework.test.web.servlet.ResultActions;
  * arrives as {@code AUTH_ADMIN_EMAILS}.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
+        // Rate limiting off: these cases exercise the auth rules, and they drive far more
+        // logins and registrations from one loopback address than a real user ever would, so
+        // the limiter would refuse them for being a test rather than for being wrong. That the
+        // limiter itself works is asserted separately, in RateLimitTest.
+        "security.rate-limit.enabled=false",
         "auth.admin-emails=ops-lead@crowdflow.local, Second.Admin@Crowdflow.Local, door@crowdflow.local",
         // An in-memory database, unlike the rest of the suite, for two reasons. The addresses
         // here are fixed rather than generated, so against the shared H2 file the second run
