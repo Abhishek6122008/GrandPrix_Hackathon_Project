@@ -8,12 +8,22 @@ pubspec.lock
 
 # Generated platform folders. `flutter create .` regenerates these from pubspec, and they are
 # large, machine-specific and full of absolute paths.
-android/
+#
+# android/ is NOT in this list any more, and must not go back into it. It stopped being
+# regenerable the moment it was edited by hand: the manifest carries INTERNET (which Flutter
+# only writes into the *debug* manifest, so a release APK without it cannot reach the backend
+# at all), the two foreground location permissions geolocator needs, and usesCleartextTraffic
+# for the plain-http LAN API. `flutter create` writes none of those back. The machine-specific
+# parts are excluded by android/.gitignore instead — local.properties, the wrapper jar and
+# any keystore.
 ios/
 linux/
 macos/
 windows/
 web/
+
+# Kotlin compiler scratch, written next to the android project.
+android/.kotlin/
 
 *.iml
 .idea/
