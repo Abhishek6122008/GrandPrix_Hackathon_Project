@@ -1,0 +1,936 @@
+<!--
+  Source for docs/Crowd-Flow-Optimiser.pdf. Kept beside it so the document stays editable: a
+  PDF with no source is an artifact nobody can correct, and the figures in here go stale the
+  moment the model is retrained or a test is added.
+
+  Regenerate after editing:
+
+    chrome --headless --disable-gpu --no-pdf-header-footer       --print-to-pdf=docs/Crowd-Flow-Optimiser.pdf docs/Crowd-Flow-Optimiser.html
+
+  Any Chromium will do (chrome, msedge, chromium). Print styles are in the <style> block:
+  @page sets A4 and the margins, and each <h2> starts a new page.
+-->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Crowd Flow Optimiser — Project Document</title>
+<style>
+  @page {
+    size: A4;
+    margin: 20mm 18mm 18mm;
+  }
+  @page :first { margin: 0; }
+
+  :root {
+    --red:    #C8102E;
+    --orange: #E8590C;
+    --amber:  #B8860B;
+    --blue:   #2A5DB0;
+    --green:  #17795E;
+    --ink:    #16181D;
+    --ink-2:  #43484F;
+    --ink-3:  #767C85;
+    --rule:   #D8DCE2;
+    --wash:   #F4F6F8;
+  }
+
+  * { box-sizing: border-box; }
+
+  html { font-size: 10.5pt; }
+
+  body {
+    margin: 0;
+    font-family: Georgia, 'Iowan Old Style', 'Palatino Linotype', serif;
+    color: var(--ink);
+    line-height: 1.58;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .sans { font-family: 'Segoe UI', Inter, system-ui, -apple-system, sans-serif; }
+  code, pre, .mono {
+    font-family: 'Cascadia Mono', Consolas, 'SF Mono', Menlo, monospace;
+    font-size: 0.86em;
+  }
+  code { color: var(--ink-2); }
+
+  /* ---------- cover ---------- */
+  .cover {
+    height: 297mm;
+    padding: 34mm 24mm 22mm;
+    display: flex;
+    flex-direction: column;
+    page-break-after: always;
+    background: var(--ink);
+    color: #fff;
+  }
+  .cover .kicker {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    font-size: 8.5pt;
+    letter-spacing: .22em;
+    text-transform: uppercase;
+    color: #9AA3AF;
+    margin: 0 0 auto;
+  }
+  .cover h1 {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    font-size: 46pt;
+    line-height: 1.02;
+    letter-spacing: -.03em;
+    font-weight: 700;
+    margin: 0 0 10mm;
+  }
+  .cover h1 span { color: var(--red); }
+  .cover .lede {
+    font-size: 14pt;
+    line-height: 1.5;
+    color: #D5DAE1;
+    max-width: 118mm;
+    margin: 0 0 14mm;
+  }
+  .cover .facts {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 6mm;
+    border-top: 1px solid #333A44;
+    padding-top: 7mm;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+  }
+  .cover .facts div { font-size: 8.5pt; color: #9AA3AF; letter-spacing: .04em; }
+  .cover .facts b {
+    display: block;
+    font-size: 15pt;
+    color: #fff;
+    letter-spacing: -.01em;
+    margin-bottom: 1mm;
+  }
+
+  /* ---------- structure ---------- */
+  h2 {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    font-size: 19pt;
+    letter-spacing: -.02em;
+    line-height: 1.15;
+    margin: 0 0 1mm;
+    padding-top: 2mm;
+    page-break-before: always;
+    page-break-after: avoid;
+  }
+  h2 + .sub {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    font-size: 9pt;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--red);
+    margin: 0 0 5mm;
+    padding-bottom: 3mm;
+    border-bottom: 2px solid var(--red);
+    page-break-after: avoid;
+  }
+  h2.first { page-break-before: avoid; }
+
+  h3 {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    font-size: 12pt;
+    letter-spacing: -.01em;
+    margin: 7mm 0 2mm;
+    page-break-after: avoid;
+  }
+  h4 {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    font-size: 10pt;
+    margin: 5mm 0 1.5mm;
+    color: var(--ink-2);
+    page-break-after: avoid;
+  }
+
+  p { margin: 0 0 3.4mm; orphans: 3; widows: 3; }
+  ul, ol { margin: 0 0 3.4mm; padding-left: 5.5mm; }
+  li { margin-bottom: 1.6mm; }
+
+  strong { font-weight: 700; }
+
+  /* ---------- components ---------- */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0 0 4mm;
+    font-size: 9.2pt;
+    page-break-inside: avoid;
+  }
+  th {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    font-size: 8pt;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    text-align: left;
+    color: var(--ink-3);
+    border-bottom: 1.5px solid var(--ink);
+    padding: 0 3mm 1.5mm 0;
+  }
+  td {
+    padding: 2mm 3mm 2mm 0;
+    border-bottom: 1px solid var(--rule);
+    vertical-align: top;
+  }
+  td:last-child, th:last-child { padding-right: 0; }
+
+  pre {
+    background: var(--wash);
+    border-left: 2.5px solid var(--rule);
+    padding: 3mm 4mm;
+    margin: 0 0 4mm;
+    line-height: 1.45;
+    white-space: pre;
+    overflow: hidden;
+    page-break-inside: avoid;
+    font-size: 7.6pt;
+  }
+
+  .note {
+    border-left: 2.5px solid var(--red);
+    background: var(--wash);
+    padding: 3mm 4mm;
+    margin: 0 0 4mm;
+    page-break-inside: avoid;
+  }
+  .note p:last-child { margin-bottom: 0; }
+  .note .label {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    font-size: 7.5pt;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--red);
+    display: block;
+    margin-bottom: 1.5mm;
+  }
+
+  .metrics {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 4mm;
+    margin: 0 0 5mm;
+    page-break-inside: avoid;
+  }
+  .metric {
+    border-top: 2px solid var(--ink);
+    padding-top: 2.5mm;
+  }
+  .metric b {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    display: block;
+    font-size: 21pt;
+    letter-spacing: -.02em;
+    line-height: 1;
+    margin-bottom: 1.5mm;
+  }
+  .metric.good b { color: var(--green); }
+  .metric.bad b  { color: var(--red); }
+  .metric span {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    font-size: 8pt;
+    color: var(--ink-3);
+    line-height: 1.35;
+    display: block;
+  }
+
+  .toc { columns: 2; column-gap: 10mm; font-family: 'Segoe UI', system-ui, sans-serif; font-size: 9.5pt; }
+  .toc div { margin-bottom: 2mm; break-inside: avoid; }
+  .toc b { color: var(--red); display: inline-block; width: 7mm; }
+
+  figcaption {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    font-size: 8pt;
+    color: var(--ink-3);
+    margin-top: 1.5mm;
+  }
+  figure { margin: 0 0 5mm; page-break-inside: avoid; }
+
+  .footer-note {
+    margin-top: 6mm;
+    padding-top: 3mm;
+    border-top: 1px solid var(--rule);
+    font-size: 8.5pt;
+    color: var(--ink-3);
+  }
+</style>
+</head>
+<body>
+
+<!-- ============================ COVER ============================ -->
+<section class="cover">
+  <p class="kicker">Geek Room AI Race Month · Grandprix · Problem Statement #3</p>
+
+  <h1>Crowd&nbsp;Flow<br />Optimiser<span>.</span></h1>
+  <p class="lede">
+    Simulate a venue, predict where the crowd will jam, and route around it — before the queue
+    becomes a crush.
+  </p>
+
+  <div class="facts">
+    <div><b>5</b> runtimes in one stack</div>
+    <div><b>87%</b> of bottlenecks caught before they form</div>
+    <div><b>51 → 0</b> zone-ticks above critical</div>
+    <div><b>175</b> automated tests</div>
+  </div>
+</section>
+
+<!-- ============================ CONTENTS ============================ -->
+<h2 class="first">Contents</h2>
+<p class="sub">What is in this document</p>
+
+<div class="toc">
+  <div><b>1</b> The problem</div>
+  <div><b>2</b> What the system does</div>
+  <div><b>3</b> Architecture</div>
+  <div><b>4</b> What is an algorithm, what is AI</div>
+  <div><b>5</b> The crowd simulation</div>
+  <div><b>6</b> The AI layer</div>
+  <div><b>7</b> Proving it works</div>
+  <div><b>8</b> Floor plan to walkable graph</div>
+  <div><b>9</b> Accounts, access and privacy</div>
+  <div><b>10</b> Testing and delivery</div>
+  <div><b>11</b> Running it</div>
+  <div><b>12</b> Known limits and what is next</div>
+</div>
+
+<h3>How to read this</h3>
+<p>
+  The system is four cooperating services and a mobile client. Sections 3 to 8 explain how a
+  crowd gets from a floor plan to a routed evacuation; sections 9 to 12 cover how it is secured,
+  tested, shipped and where it stops. Every number quoted is produced by code in the repository
+  and is reproducible with the commands in section 11.
+</p>
+
+<div class="note">
+  <span class="label">The one claim worth holding onto</span>
+  <p>
+    Most crowd tools report what <em>is</em> happening. This one runs a second, hidden simulation
+    of the same crowd with rerouting switched off, on the same random seed, and compares them. The
+    before/after figure is therefore a measurement rather than an estimate — that pairing is the
+    heart of the project.
+  </p>
+</div>
+
+<!-- ============================ 1. PROBLEM ============================ -->
+<h2>1 · The problem</h2>
+<p class="sub">Why crowd crushes are a routing failure</p>
+
+<p>
+  Crowds bunch at gates, food counters and exits without warning. The dangerous moment is not
+  when a venue is full. It is when one zone fills while the zones beside it stay empty, because
+  everybody was following the same shortest path to the same door. By the time density is visible
+  on a CCTV wall, the people who could have been diverted are already inside the jam.
+</p>
+
+<p>
+  The information needed to prevent it usually exists and is simply never joined up. The venue
+  knows its own floor plan. Ticketing knows roughly how many people are arriving and when.
+  Stewards know which corridors are moving. What nobody has is a way to put those together and
+  answer the only question that matters a few minutes ahead of time: <em>where will the pile-up be, and where should these people go instead?</em>
+</p>
+
+<h3>What this project builds</h3>
+<p>
+  A venue is uploaded as a floor plan and becomes a graph of zones and walkable connections. A
+  crowd is simulated moving through it, person by person. Density is measured per zone every
+  tick, a model predicts which zones are about to become dangerous, and the system diverts people
+  around them, then proves the diversion helped by running the same crowd again without it.
+</p>
+
+<h3>Who uses it</h3>
+<table>
+  <thead><tr><th style="width:22%">Role</th><th>What they get</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><strong>Attendee</strong></td>
+      <td>Types the venue code from the entrance signage and gets the map with a route out that is
+          coloured by live congestion, and planned <em>around</em> the crowd rather than through it.</td>
+    </tr>
+    <tr>
+      <td><strong>Organiser</strong></td>
+      <td>Traces a floor plan into a graph, runs the session, watches occupancy fill zone by zone,
+          and reads a ranked crowd-safety panel saying which zone is becoming dangerous and what to
+          do about it.</td>
+    </tr>
+    <tr>
+      <td><strong>Operations</strong></td>
+      <td>Every session on the platform on one board, with aggregate figures and the alert feed.</td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ============================ 2. WHAT IT DOES ============================ -->
+<h2>2 · What the system does</h2>
+<p class="sub">The loop, end to end</p>
+
+<ol>
+  <li><strong>A venue becomes a graph.</strong> An organiser uploads a 2D floor plan. Computer
+      vision traces the walkable space into zones (<code>GATE</code>, <code>WALKWAY</code>,
+      <code>CONCESSION</code>, <code>SEATING</code>, <code>EXIT</code>) joined by edges carrying a
+      length and a width. The operator corrects it on screen; the corrected graph is validated
+      again before anything runs on it.</li>
+  <li><strong>A crowd is simulated on it.</strong> Agents arrive at gates on a schedule and move
+      toward their destinations under a social force model, ten times a second.</li>
+  <li><strong>Density is measured.</strong> Every zone reports occupancy against capacity, tagged
+      rising, flat or falling over a rolling window.</li>
+  <li><strong>Risk is predicted.</strong> A graph neural network takes the current densities and
+      the venue structure and returns, per zone, the risk of crossing the critical line within
+      the next few ticks.</li>
+  <li><strong>People are rerouted.</strong> Newly alerting zones trigger a Dijkstra search for an
+      alternative, and a small language model turns the numbers into an instruction a steward can
+      act on.</li>
+  <li><strong>The result is proved.</strong> A hidden twin of the same run, same seed, rerouting
+      off, ticks in lockstep. The summary compares them.</li>
+</ol>
+
+<h3>What an attendee sees</h3>
+<p>
+  A route drawn segment by segment in the colour of the zone it enters (blue clear, amber moderate, orange heavy, red severe), with a banner that says when the route has been diverted
+  and what the diversion cost in metres. The route is recomputed in the browser from the live
+  density arriving on the session socket five times a second, so it responds to the crowd without
+  a request per attendee per tick.
+</p>
+
+<div class="note">
+  <span class="label">A deliberate design decision</span>
+  <p>
+    A crowded zone is expensive to walk into, not forbidden. The cost of entering a zone rises
+    with the fourth power of its density, so a short hop through a busy area still beats a long
+    detour — which is what a navigation app does and what an evacuating crowd should do. Only
+    genuinely crushed zones, above 94% of safe capacity, are treated as walls.
+  </p>
+</div>
+
+<!-- ============================ 3. ARCHITECTURE ============================ -->
+<h2>3 · Architecture</h2>
+<p class="sub">Four services, and a fifth client</p>
+
+<pre>┌──────────────────────────────────────────────────────────────────┐
+│  React (Vite) · port 5173                                        │
+│  CrowdFlowApp.jsx — routes; the screens live beside it in src/   │
+│  LayoutStudio.jsx — floor plan → walkable graph                  │
+│  api.js  REST + bearer token   ·  useLiveSession.js  WebSocket   │
+│  crowdRouting.js — the attendee route, planned around the crowd  │
+└───────────────┬───────────────────────────────┬──────────────────┘
+                │ HTTP                          │ WebSocket
+┌───────────────┴──────────────────┐            │
+│  Flutter · mobile/               │            │  attendees only: polls
+│  consent → join → live           │            │  state, PUTs its zone.
+│  optional GPS, else tap a zone   │            │  Never holds the socket.
+└───────────────┬──────────────────┘            │
+                │ HTTP                          │
+┌───────────────▼───────────────────────────────▼──────────────────┐
+│  Spring Boot · port 8080                                         │
+│  JwtAuthFilter → LOCAL / Supabase / Firebase token verifiers     │
+│  Controllers → SessionManager   (one live run per session)       │
+│              → SimulationEngine (tick loop, social force model)  │
+│              → DensityDetector  (threshold + trend)              │
+│              → RerouteEngine    (Dijkstra)                       │
+│              → GnnRiskClient / AdvisoryService ──── HTTP ──────┐ │
+│                                                                │ │
+│  Accounts  → JPA + Flyway → H2 file (local) / Postgres (cloud) │ │
+│  Sessions  → in memory (ConcurrentHashMap), die with the process│ │
+└────────────────────────────────────────────────────────────────┼─┘
+                                                                 │
+┌────────────────────────────────────────────────────────────────▼─┐
+│  FastAPI · port 8000                                             │
+│  /analyze    per-zone risk + operator advisory                   │
+│  /layout/*   floor-plan tracing (OpenCV, optional Qwen2.5-VL)    │
+│  scoring.py  offline fallback — always available, no download    │
+└──────────────────────────────────────────────────────────────────┘</pre>
+<figcaption>Each tier degrades rather than failing. The frontend renders signed-out, the backend
+keeps ticking and broadcasting measured density with the AI service down, and the AI service
+answers from its offline scorer with no model downloaded and no token set.</figcaption>
+
+<h3>Why the AI layer is a separate service</h3>
+<p>
+  The models are Python and the simulation is Java, and forcing either into the other's runtime
+  would have cost more than the HTTP hop. Splitting them also produces the property the demo
+  depends on: the AI call is always made <em>off</em> the tick thread, so a slow or dead <code>/analyze</code> costs a stale risk number rather than a frozen simulation. A session that
+  loses its AI layer keeps running and keeps broadcasting real measured density.
+</p>
+
+<h3>State, and what survives a restart</h3>
+<table>
+  <thead><tr><th style="width:26%">Data</th><th style="width:26%">Where</th><th>Lifetime</th></tr></thead>
+  <tbody>
+    <tr><td>Accounts</td><td>H2 file locally, Postgres in cloud</td><td>Permanent, Flyway-migrated</td></tr>
+    <tr><td>Venues</td><td>One JSON file per venue code</td><td>Permanent; a printed code must still work tomorrow</td></tr>
+    <tr><td>Sessions</td><td>In memory</td><td>Die with the process, by design</td></tr>
+    <tr><td>Attendee positions</td><td>Zone id + expiry, in the session</td><td>30 seconds without a fresh report</td></tr>
+  </tbody>
+</table>
+
+<!-- ============================ 4. ALGORITHM VS AI ============================ -->
+<h2>4 · What is an algorithm, what is AI</h2>
+<p class="sub">A deliberate split, not a default</p>
+
+<p>
+  Forcing machine learning into the deterministic parts of this problem would have cost time and
+  bought nothing. Each piece uses the cheapest technique that actually answers its question.
+</p>
+
+<table>
+  <thead><tr><th style="width:26%">Piece</th><th style="width:26%">Approach</th><th>Why</th></tr></thead>
+  <tbody>
+    <tr><td>Crowd movement per tick</td><td>Social force model over a capacitated graph</td>
+        <td>Deterministic, fast, debuggable. A crowd that moves wrongly is a bug you can step through.</td></tr>
+    <tr><td>Reroute suggestion</td><td>Dijkstra</td>
+        <td>Provably shortest. There is nothing to train and nothing that could be more correct.</td></tr>
+    <tr><td><strong>Where congestion spreads next</strong></td><td><strong>Graph neural network</strong></td>
+        <td>Needs the graph structure. A per-zone threshold cannot see a neighbour about to push its crowd into you.</td></tr>
+    <tr><td><strong>Turning numbers into an instruction</strong></td><td><strong>Small instruct model</strong></td>
+        <td>Operators read sentences, not density vectors.</td></tr>
+    <tr><td>Floor plan → walkable graph</td><td>OpenCV skeletonisation, optional VLM pass</td>
+        <td>Geometry, not perception. The vision model only labels what the CV pass already found.</td></tr>
+  </tbody>
+</table>
+
+<div class="note">
+  <span class="label">Why a GNN and not a threshold</span>
+  <p>
+    A threshold answers "is this zone busy". The question that prevents a crush is "is this zone <em>about to become</em> busy", and the answer usually lives in its neighbours: a concourse at 60% with two full stands feeding into it is in far more trouble than a concourse at 75% with empty ones. That relationship is the graph's structure, which is exactly what a message-passing network reads and a per-zone rule cannot.
+  </p>
+</div>
+
+<!-- ============================ 5. SIMULATION ============================ -->
+<h2>5 · The crowd simulation</h2>
+<p class="sub">Helbing–Molnár over a capacitated graph</p>
+
+<h3>Agent movement</h3>
+<p>
+  Each agent is pulled toward its next waypoint by a driving term, pushed away from other agents
+  by an exponential repulsion, and pushed off walls by the same exponential. Agents slow and
+  swerve rather than overlap, which is what collision handling means in a crowd model. People do not bounce, they hesitate and go around.
+</p>
+
+<p>
+  Everything works in <strong>venue layout units, one integration step per tick</strong>, not
+  metres and seconds. The published Helbing constants assume SI units, so the constants here are
+  calibration knobs rather than physical ones, and they bind from configuration so a crowd can be
+  retuned against a new layout without a rebuild. Being explicit about this matters: quoting SI
+  constants for a model that does not run in SI would be a claim the code does not support.
+</p>
+
+<h3>One tick, in order</h3>
+<ol>
+  <li>The scheduler fires — every 100&nbsp;ms in agent mode.</li>
+  <li>Exits drain. Everyone else advances toward their destination as far as downstream capacity
+      and edge throughput allow. <strong>People who cannot move stay put</strong>, which is what makes density climb rather than being imposed.</li>
+  <li>Arrivals enter at the gates on the schedule's curve.</li>
+  <li>Risk is predicted from the current densities and the graph.</li>
+  <li>Zones over threshold are tagged rising, flat or falling from the last five ticks.</li>
+  <li>For each <em>newly</em> alerting zone: find a reroute, then generate an advisory. Alerts fire
+      on severity change only, or the feed floods and becomes unreadable.</li>
+  <li>The new state is pushed to every WebSocket watching the run.</li>
+</ol>
+
+<h3>Why congestion limits flow at the destination</h3>
+<p>
+  Congestion slows people <em>entering</em> a crowded space; it does not paralyse the space they
+  are leaving. A packed gate still empties at the corridor's rate. Modelling it the other way
+  round, scaling how fast people leave by their own zone's density, makes jams self-locking:
+  they never clear, no routing change can help, and the model quietly proves that nothing works.
+  That dead end is avoided on purpose.
+</p>
+
+<h3>Broadcast economics</h3>
+<p>
+  The clock runs at 10&nbsp;Hz and frames are pushed at 5&nbsp;Hz, which halves socket traffic
+  without the map looking choppy. Agent positions per frame are capped and sampled, with the true
+  crowd size still reported alongside, so a 5,000-person venue does not put 5,000 coordinates on
+  the wire twice a second.
+</p>
+
+<!-- ============================ 6. AI LAYER ============================ -->
+<h2>6 · The AI layer</h2>
+<p class="sub">Two models, and a fallback that always answers</p>
+
+<h3>Congestion GNN</h3>
+<p>
+  A graph neural network trained on synthetic runs of the simulator, published to the Hugging
+  Face Hub as <code>abhi1005/congestion-gnn</code>. It takes the venue graph and the current
+  per-zone densities and returns the risk that each zone crosses the critical line within the
+  prediction horizon.
+</p>
+
+<p>
+  The honest way to score it is the part worth reading carefully. Measured across
+  <em>all</em> zone-ticks above the line, a persistence baseline ("assume every zone stays as it is") already scores about 92% recall, because most zones that are critical in five ticks are
+  already critical now. That number measures reporting, not prediction, and quoting it would be
+  misleading.
+</p>
+
+<p>
+  The real claim is <strong>onset</strong>: zones below the line now that cross it within the
+  horizon. Persistence scores exactly zero on that by construction. On held-out runs:
+</p>
+
+<table>
+  <thead><tr><th style="width:30%"></th><th>Caught</th><th>Recall</th><th>Precision</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Congestion GNN</strong></td><td>1,421 of 1,630</td><td><strong>87%</strong></td><td>95%</td></tr>
+    <tr><td>Persistence baseline</td><td>0 of 1,630</td><td>0%</td><td>—</td></tr>
+  </tbody>
+</table>
+
+<div class="note">
+  <span class="label">The number to quote</span>
+  <p>
+    <strong>The model catches 87% of bottlenecks before they form,</strong> at 95% precision.
+    Not the 99% that the easier framing would have produced.
+  </p>
+</div>
+
+<h3>Operator advisory</h3>
+<p>
+  A small instruct model turns a density vector into a sentence a marshal can act on. It is used
+  as-is rather than fine-tuned. Converting numbers to fluent instructions is precisely what small instruct models already do well.
+</p>
+
+<p>
+  It is also the component most likely to lie, so it is constrained rather than trusted: an
+  advisory naming a zone that was not in the prompt is <strong>rejected outright</strong> and the
+  deterministic template is used instead. Fluent and wrong is worse than plain and right when
+  somebody is about to move a crowd on the strength of it.
+</p>
+
+<h3>The fallback ladder</h3>
+<p>
+  Every inference step chooses its path independently, so a working GNN with a missing advisory
+  model still gives real risk scores with templated prose.
+</p>
+<table>
+  <thead><tr><th style="width:30%">Path</th><th>Used when</th></tr></thead>
+  <tbody>
+    <tr><td>Hosted inference</td><td>A token and endpoint URL are configured</td></tr>
+    <tr><td>In-process models</td><td>The model is present and its library installed</td></tr>
+    <tr><td>Offline scorer</td><td>Always available — no download, no network, no token</td></tr>
+  </tbody>
+</table>
+<p>
+  The health endpoint names whichever path actually answered, so "why is the advisory generic"
+  takes one request to diagnose rather than an hour mid-demo.
+</p>
+
+<!-- ============================ 7. PROOF ============================ -->
+<h2>7 · Proving it works</h2>
+<p class="sub">The hidden twin</p>
+
+<p>
+  Claiming that rerouting helps is easy. Measuring it requires the counterfactual, so starting a
+  run with rerouting enabled also starts a hidden twin: the same venue, the same crowd, the same
+  random seed, rerouting off, ticked in lockstep. The summary compares the two. The difference is
+  real simulation output rather than an estimate.
+</p>
+
+<h3>The two levers</h3>
+<p>Both match what the advisories actually tell staff to do:</p>
+<ol>
+  <li><strong>Spill sideways.</strong> People may move <em>laterally</em> (to a zone the same hop-distance from the exit) when the direct route is full, instead of queueing. Never
+      backwards: sending people back toward the gate is not a reroute, it is a crush.</li>
+  <li><strong>Hold intake.</strong> A gate stops accepting arrivals just below the critical
+      threshold, so people wait outside rather than pack into the gate.</li>
+</ol>
+
+<h3>Result on the sample venue</h3>
+<div class="metrics">
+  <div class="metric good">
+    <b>51 → 0</b>
+    <span>Zone-ticks above critical density. The headline number.</span>
+  </div>
+  <div class="metric good">
+    <b>85%</b>
+    <span>Peak density, against 100% untreated.</span>
+  </div>
+  <div class="metric">
+    <b>same seed</b>
+    <span>Identical crowd and arrival curve on both sides.</span>
+  </div>
+</div>
+
+<h3>Reading the numbers honestly</h3>
+<p>
+  <strong>Time spent above critical is the headline</strong>, and the other candidates mislead on
+  their own. Peak density gets pinned at 100% by any single undersized kiosk regardless of
+  routing. Bottleneck <em>count</em> actually <em>rises</em> when a crowd is successfully spread
+  out, because more zones briefly touch the threshold. Time in the red is what routing genuinely
+  moves.
+</p>
+
+<p>
+  The summary also declines to compare throughput. The untreated run usually gets more people
+  through, by packing gates several times over capacity, which is precisely the
+  thing being prevented. Reporting it as a win for the untreated side would be true arithmetic
+  and a false claim.
+</p>
+
+<div class="note">
+  <span class="label">Real attendees are excluded, deliberately</span>
+  <p>
+    Attendees using the mobile app raise the density an operator sees, but they are kept out of
+    the two compared numbers. The twin has no real attendees and cannot have any — it is a second
+    simulation of the same seed, not a second venue people can walk into. Counting a phone
+    standing in a gate would add it to the optimised side and nowhere else, and the summary would
+    report that rerouting had made the venue <em>worse</em>. One test,
+    <code>realAttendeesRaiseLiveDensityButNeverTheBaselineNumbers</code>, is the executable form
+    of that sentence.
+  </p>
+</div>
+
+<!-- ============================ 8. LAYOUT PIPELINE ============================ -->
+<h2>8 · Floor plan to walkable graph</h2>
+<p class="sub">Where a venue comes from</p>
+
+<p>
+  An organiser should not have to hand-author a graph. They upload a 2D plan, and the pipeline
+  turns it into one. The graph, never the image, is the source of truth. No PNG, no rendered
+  map and no model output is canonical; everything downstream reads the one graph object.
+</p>
+
+<h3>The stages</h3>
+<ol>
+  <li><strong>Normalise and mask.</strong> The plan is scaled to a working canvas and reduced to a
+      walkable/not-walkable mask.</li>
+  <li><strong>Rooms, optionally.</strong> Enclosed rooms are separated from circulation space, or
+      corridors get traced straight through them. Off for arenas, on for anything with rooms.</li>
+  <li><strong>Skeletonise.</strong> The walkable area is thinned to a centre-line network — the
+      expensive stage, and the reason the tuning preview stops just before it.</li>
+  <li><strong>Build the graph.</strong> Junctions become nodes, the runs between them become edges
+      carrying length and width.</li>
+  <li><strong>Label.</strong> A vision-language model optionally names zones by reading the plan's
+      own text. It only labels what the geometry already found; it never invents a zone.</li>
+  <li><strong>Validate and repair.</strong> Deterministic checks with automatic repair where the
+      fix is unambiguous.</li>
+</ol>
+
+<h3>The human is in the loop, and the loop is enforced</h3>
+<p>
+  The operator edits the traced graph on screen, and the confirm step <strong>re-runs validation
+  on the edited graph</strong> rather than trusting the client. An operator dragging nodes around
+  can disconnect a gate from every exit just as easily as the tracer can, and a graph where
+  somebody has no route out is the one failure that must never reach a simulation. The start
+  button stays disabled while errors remain.
+</p>
+
+<div class="note">
+  <span class="label">Graceful absence</span>
+  <p>
+    The vision stack is a separate dependency set. If it is not installed the service still starts
+    and <code>/analyze</code> is unaffected; the health endpoint simply reports layout tracing as
+    unavailable, so the UI can say so instead of letting an operator upload a plan and receive a
+    404.
+  </p>
+</div>
+
+<!-- ============================ 9. SECURITY ============================ -->
+<h2>9 · Accounts, access and privacy</h2>
+<p class="sub">Who may call what, and what is never collected</p>
+
+<h3>Three providers, one code path</h3>
+<p>
+  Every provider reduces to the same question — is this token validly signed by someone I trust,
+  and who does it say the caller is? — so they differ only in the key used to check the signature.
+  Each incoming token is offered to every enabled verifier in turn and the first that recognises
+  it wins. All three can be active simultaneously, and a provider with no configuration reports
+  itself disabled and is skipped.
+</p>
+
+<table>
+  <thead><tr><th style="width:22%">Provider</th><th style="width:32%">Signing</th><th>Sign-up handled by</th></tr></thead>
+  <tbody>
+    <tr><td>Local</td><td>HS256, our secret</td><td>This backend</td></tr>
+    <tr><td>Supabase</td><td>HS256, project JWT secret</td><td>Supabase</td></tr>
+    <tr><td>Firebase</td><td>RS256, Google rotating keys</td><td>Firebase</td></tr>
+  </tbody>
+</table>
+
+<h3>Admin is not self-service</h3>
+<p>
+  Reads are public so the marketing pages and the live map work signed-out; writes need a role.
+  Administrator cannot be requested at registration and cannot be reached by signing in at the
+  admin door; both answer 403. The grant comes from a configured allowlist applied at every
+  registration and login, which makes it reversible from outside the database in both directions.
+  Critically, the same allowlist now governs federated sign-ins: a token from an external provider
+  claiming an administrator role is capped at organiser unless its address is on the list.
+</p>
+
+<h3>Defence in depth</h3>
+<ul>
+  <li><strong>Uniform answers.</strong> Password reset returns the same response for a registered
+      address, an unknown one and a disabled one — otherwise the endpoint becomes a free tool for
+      discovering which emails hold accounts. Login likewise cannot distinguish "no such user"
+      from "wrong password".</li>
+  <li><strong>Rate limiting ahead of authentication.</strong> Token buckets refuse a login attempt
+      before it costs the server the password hash it cannot decline to compute, which is what made an unlimited guess rate and a denial of service the same request.</li>
+  <li><strong>The deployment cannot boot insecure.</strong> The cloud profile refuses to start on
+      the development JWT secret or on one too short to be one.</li>
+  <li><strong>Service-to-service authentication.</strong> The AI layer requires a shared secret,
+      compared in constant time, so an exposed port is not free access to endpoints that run
+      computer vision on whatever they are handed.</li>
+  <li><strong>Browser hardening.</strong> A content security policy, framing and sniffing
+      protections, and inline-only avatars, since a remote avatar URL would let a profile decide which third-party host every viewer's browser calls.</li>
+</ul>
+
+<h3>What is deliberately not collected</h3>
+<p>
+  The attendee experience is built to need as little as possible, and the limits are architectural
+  rather than promised:
+</p>
+<ul>
+  <li><strong>A zone, not a position.</strong> A GPS fix is resolved to a zone at the ingest
+      boundary and the coordinates are discarded. The session object <em>has no field</em> to put
+      them in. The fix is echoed back to the phone that sent it, so it can draw its own dot, and
+      to nobody else.</li>
+  <li><strong>A fix that cannot support its claim is thrown away.</strong> If the reported accuracy
+      circle is larger than the zone it lands in, nobody is placed. The app never draws a position
+      it does not have.</li>
+  <li><strong>Foreground only.</strong> No background location permission is requested, and an
+      attendee who closes the app ages out of the venue within 30 seconds.</li>
+  <li><strong>Anonymous and session-scoped.</strong> The identifier is a UUID the app generates and
+      keeps to itself. There is no account and nothing to join it to.</li>
+</ul>
+
+<!-- ============================ 10. TESTING ============================ -->
+<h2>10 · Testing and delivery</h2>
+<p class="sub">What has to pass before anything merges</p>
+
+<div class="metrics">
+  <div class="metric"><b>102</b><span>Backend tests, through the real security filter chain</span></div>
+  <div class="metric"><b>49</b><span>AI service tests, including the model contract</span></div>
+  <div class="metric"><b>24</b><span>Frontend unit tests, plus render and portal smokes</span></div>
+</div>
+
+<h3>The layers, and what each is for</h3>
+<table>
+  <thead><tr><th style="width:30%">Layer</th><th>What it catches</th></tr></thead>
+  <tbody>
+    <tr><td>Backend unit &amp; API</td><td>Access rules driven through the real filter chain, simulation
+        mechanics, walker ingest and expiry, the before/after invariant.</td></tr>
+    <tr><td>AI service</td><td>Feature-column contract between training and serving, degradation when a
+        model endpoint is dead, the layout pipeline, the service token gate.</td></tr>
+    <tr><td>Frontend unit</td><td>Routing and the congestion cost model, credential rules, venue codes.</td></tr>
+    <tr><td>Render smoke</td><td>Every route mounts. A production build only proves the module graph
+        resolves — it cannot catch a component that is undefined at the call site or a crash inside
+        render, which are blank-screen bugs in the browser.</td></tr>
+    <tr><td>Stack smoke</td><td>One attendee's journey across all three services: register, upload a
+        venue, run a session, report a position, read the frame.</td></tr>
+  </tbody>
+</table>
+
+<div class="note">
+  <span class="label">Why the stack test exists</span>
+  <p>
+    Every other suite runs one service with its neighbours stubbed. That is correct for a unit
+    test, and it is exactly why nothing caught a mismatch <em>between</em> services. A renamed field, a security rule that refuses a call the frontend has always made, a migration that did not run: each passes every unit test and breaks the product. The stack test also asserts the
+    negatives, that an anonymous venue upload is refused and that the attendee path still works
+    <em>without</em> a token. It found three field mismatches while it was being written.
+  </p>
+</div>
+
+<h3>Pipelines</h3>
+<p>
+  Two, running the same commands: GitHub Actions gates every pull request, and a containerised
+  Jenkins pipeline mirrors it. Both run cheapest-signal-first — four test jobs in parallel that
+  fail in seconds, with the full container stack build waiting behind them rather than spending
+  fifteen minutes on a commit a unit test already rejected. The stack job brings the compose
+  environment up, waits for every container to report healthy, and then runs the end-to-end pass
+  against it.
+</p>
+
+<!-- ============================ 11. RUNNING ============================ -->
+<h2>11 · Running it</h2>
+<p class="sub">From a clean checkout</p>
+
+<h3>Everything, in one command</h3>
+<pre>docker compose up --build</pre>
+<p>
+  Brings up Postgres, the AI service, the backend and the built frontend together at
+  <code>localhost:5173</code>. This runs the backend under its cloud profile against Postgres,
+  which is the shape a real deployment has rather than the shape a laptop has. The same Flyway migrations run either way, which is the point.
+</p>
+
+<h3>Or as three processes, which is the better development loop</h3>
+<p>
+  Start them in any order; each degrades gracefully while the others are down. The AI service
+  needs no token and no model — it answers from its offline scorer on a clean checkout, which is
+  the property that makes the demo survive bad conference wifi. The backend writes to a local H2
+  file, so no database install is required and accounts survive a restart.
+</p>
+
+<h3>Reproducing the numbers in this document</h3>
+<pre>backend    ./mvnw test                    # 102 tests
+ai-service python -m pytest tests -q      # 49 tests
+frontend   npm test && npm run test:render
+stack      docker compose up -d --wait && ci/smoke-stack.sh
+model      python gnn/evaluate.py --checkpoint out/congestion_gnn.pt</pre>
+
+<h3>Configuration philosophy</h3>
+<p>
+  Nothing required has a default that needs a network or a token. Every secret is absent from the
+  repository and supplied by environment variable or an ignored local file, and every one of them
+  has a committed example showing its shape. The admin allowlist ships <em>empty</em> on purpose. This is a public repository, and a real address in it would publish both who holds
+  administrator access and their inbox. Empty means nobody has it, which is the safe way to be
+  wrong.
+</p>
+
+<!-- ============================ 12. LIMITS ============================ -->
+<h2>12 · Known limits and what is next</h2>
+<p class="sub">Stated rather than discovered</p>
+
+<h3>Limits</h3>
+<table>
+  <thead><tr><th style="width:34%">Limit</th><th>Consequence, and the fix</th></tr></thead>
+  <tbody>
+    <tr><td>Sessions live in memory</td>
+        <td>A restart loses running simulations; accounts and venues survive. Durable runs are a
+            change to the session manager, not a config switch.</td></tr>
+    <tr><td>Rate limiting is per-process</td>
+        <td>Two instances behind a load balancer allow twice the configured rate. A shared store,
+            or a limit at the proxy, makes it exact.</td></tr>
+    <tr><td>Tokens do not refresh</td>
+        <td>Twelve hours, then a fresh login. Refresh tokens mean a second table and a rotation
+            endpoint.</td></tr>
+    <tr><td>Attendee position is zone-level and self-declared</td>
+        <td>Deliberate. The system simulates a crowd; it does not track anyone's phone, and the
+            interface says so rather than drawing a false accuracy circle.</td></tr>
+    <tr><td>Model trained on synthetic runs</td>
+        <td>The simulator generates its training data, so the GNN learns this model's dynamics.
+            Real venue telemetry is the honest next input.</td></tr>
+  </tbody>
+</table>
+
+<h3>Next</h3>
+<ul>
+  <li><strong>Real telemetry.</strong> Turnstile counts and anonymised WiFi association counts are
+      already zone-level, which is exactly the shape the ingest boundary accepts. Nothing in the
+      pipeline needs to change to take them.</li>
+  <li><strong>Scale the fan-out, not the API.</strong> The WebSocket broadcast, rather than the HTTP
+      surface, is what stands between this and tens of thousands of concurrent viewers.</li>
+  <li><strong>Schedule awareness.</strong> Arrival curves are configured per run; the event schedule
+      format already exists and could drive them directly, so a set change or a full-time whistle
+      is anticipated rather than observed.</li>
+  <li><strong>Browser-level tests.</strong> Rendering is smoke-tested server-side; a real driver over
+      a running stack would close the last gap.</li>
+</ul>
+
+<div class="note">
+  <span class="label">The idea in one paragraph</span>
+  <p>
+    A venue is a graph, a crowd is a simulation over it, and a crush is a routing failure that can
+    be seen coming. Classical algorithms handle the parts that are deterministic (movement and shortest paths) and machine learning handles the two that are genuinely not: where congestion
+    will spread through the structure, and how to say that in a sentence somebody can act on. The
+    hidden twin is what turns the whole thing from a claim into a measurement.
+  </p>
+</div>
+
+<p class="footer-note">
+  Crowd Flow Optimiser · Geek Room AI Race Month, Grandprix · Problem Statement #3.
+  Every figure in this document is produced by code in the repository and reproducible with the
+  commands in section 11.
+</p>
+
+</body>
+</html>
