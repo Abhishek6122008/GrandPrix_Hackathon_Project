@@ -25,6 +25,31 @@ the web frontend running.
 
 Join with a session id (`sess-1a2b3c4d`) from the client portal or the signage.
 
+### Building an APK
+
+```bash
+flutter build apk --release --dart-define=CROWDFLOW_API=http://<your-machine-ip>:8080
+```
+
+Output lands in `build/app/outputs/flutter-apk/app-release.apk`, ~48 MB for all three ABIs.
+`--split-per-abi` gets that to ~17 MB each if the size matters.
+
+**The `--dart-define` matters more here than it does for `flutter run`.** `kApiBase` is a
+`String.fromEnvironment`, which is resolved at *compile* time — so the URL is baked into the
+binary and whoever installs the APK cannot change it. An APK built without the define points at
+`10.0.2.2` and works only in the Android emulator. This is why there is no release published
+anywhere: an APK is only useful to someone on the same network as the machine it was built for,
+until there is a deployed backend to point at.
+
+Two things that will bite on a fresh machine:
+
+- **`GRADLE_USER_HOME`.** If it points somewhere that does not exist, Gradle fails to unpack its
+  own distribution and the error names a `.lck` file rather than the real problem. Unset it, or
+  point it at `~/.gradle`.
+- **Release builds are signed with debug keys** (see `android/app/build.gradle.kts`). The debug
+  keystore is generated per machine, so an APK built on one laptop will refuse to install over
+  one built on another. Uninstall first, or set up a real keystore.
+
 ---
 
 ## What it collects, exactly
